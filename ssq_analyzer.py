@@ -1,7 +1,6 @@
 import json
 import os
 import time
-from google import genai
 import numpy as np
 import pandas as pd
 import requests
@@ -171,13 +170,12 @@ def generate_dantuo_recommendation(df, transition_probs):
 
 
 def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
-  """调用 Gemini API 进行数据建模分析与逻辑研判"""
+  """调用 Gemini REST API 进行数据建模分析与逻辑研判"""
   api_key = os.environ.get('GEMINI_API_KEY')
   if not api_key:
     return '（未检测到 GEMINI_API_KEY 环境变量，跳过 AI 推演）'
 
   try:
-    client = genai.Client(api_key=api_key)
     recent_records_str = '\n'.join([
         f"期号 {r['issue']}: 红球 {r['reds']} | 蓝球 {r['blue']} | 三区比"
         f" {r['zone_ratio']} | 012路 {r['road_012']} | AC值 {r['ac_value']}"
@@ -185,7 +183,7 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
     ])
 
     prompt = f"""
-你是一位精准的数据统计与概率分析专家。以下是最新开奖数据指标：
+你是一位精准的数据统计与彩票概率分析专家。以下是最新开奖数据指标：
 
 {recent_records_str}
 
@@ -197,11 +195,23 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
 1. 精选 6+1 单式推荐组合
 2. 简要分析推导依据
 """
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=prompt,
-    )
-    return response.text
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}'
+    headers = {'Content-Type': 'application/json'}
+    payload = {'contents': [{'parts': [{'text': prompt}]}]}
+
+    resp = requests.post(url, headers=headers, json=payload, timeout=15)
+    if resp.status_code == 200:
+      data = resp.json()
+      candidates = data.get('candidates', [])
+      if candidates:
+        text = (
+            candidates[0]
+            .get('content', {})
+            .get('parts', [])[0]
+            .get('text', '')
+        )
+        return text
+    return f'（Gemini API 响应状态码 {resp.status_code}，使用纯数学模型预测）'
   except Exception as e:
     return f'（Gemini API 调用提示: {e}）'
 
