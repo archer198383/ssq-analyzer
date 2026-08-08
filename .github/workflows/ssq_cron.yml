@@ -27,12 +27,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 运行分析与推算程序
+      - name: 运行分析与推算程序（含 Gemini AI 连接）
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python ssq_analyzer.py
 
       - name: 自动提交并推送 README 报告
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Auto update SSQ trend analysis [skip ci]"
+          commit_message: "Auto update SSQ trend analysis with Gemini AI [skip ci]"
           file_pattern: "README.md"
