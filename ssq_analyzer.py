@@ -8,7 +8,6 @@ import requests
 
 def fetch_ssq_history(limit=50):
   """抓取最新开奖数据（含多接口备用与保底数据）"""
-  # 接口 1：新浪彩票 API
   try:
     url = f'http://f.api.lottery.sina.com.cn/lottery/get_issue_list?type=ssq&format=json&limit={limit}'
     headers = {
@@ -41,7 +40,6 @@ def fetch_ssq_history(limit=50):
   except Exception as e:
     print(f'新浪 API 抓取提示: {e}')
 
-  # 保底历史数据集（安全转换格式）
   print('网络接口请求超时，启动保底数据库推算...')
   r1 = list(map(int, '2,8,15,21,26,31'.split(',')))
   r2 = list(map(int, '5,11,14,19,27,33'.split(',')))
@@ -140,7 +138,11 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
 
 请进行简要分析，并给出精选推荐。
 """
-  models_to_try = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+  models_to_try = [
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+      'gemini-2.0-flash-exp',
+  ]
 
   for model_name in models_to_try:
     try:
@@ -148,16 +150,19 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
       headers = {'Content-Type': 'application/json'}
       payload = {'contents': [{'parts': [{'text': prompt}]}]}
 
-      resp = requests.post(url, headers=headers, json=payload, timeout=15)
+      resp = requests.post(url, headers=headers, json=payload, timeout=12)
+      print(f'试图调用模型 {model_name}，状态码: {resp.status_code}')
       if resp.status_code == 200:
         data = resp.json()
         candidates = data.get('candidates', [])
         if candidates:
-          parts = candidates[0].get('content', {}) .get('parts', [])
+          parts = candidates[0].get('content', {}).get('parts', [])
           if parts:
             return parts[0].get('text', '')
+      else:
+        print(f'模型 {model_name} 返回错误信息: {resp.text}')
     except Exception as e:
-      print(f'模型 {model_name} 尝试提示: {e}')
+      print(f'模型 {model_name} 异常: {e}')
 
   return '（Gemini API 响应异常，已自动切换使用数学模型推算结果）'
 
