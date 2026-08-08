@@ -1,6 +1,6 @@
 # 🎱 双色球数据分析与 Gemini 云端预测系统
 
-> **自动更新时间**：`2026-08-08 18:36:52` （云端自动监测运行）
+> **自动更新时间**：`2026-08-08 18:40:25` （云端自动监测运行）
 
 ---
 
@@ -17,7 +17,11 @@
 ---
 
 ### 🤖 Gemini AI 智能综合研判与建议
-（Gemini API 密钥已激活，系统已同步完成数据推算）
+（Gemini API 响应诊断: gemini-2.5-flash(403:Your project has been denied access. Please contact support.); gemini-2.0-flash(429:You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash
+Please retry in 34.834992801s.); gemini-1.5-flash(404:models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.); gemini-1.5-pro(404:models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.)）
 
 ---
 
