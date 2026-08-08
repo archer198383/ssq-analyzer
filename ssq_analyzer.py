@@ -138,20 +138,23 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
 
 请进行简要分析，并给出精选推荐。
 """
-  models_to_try = [
-      'gemini-1.5-flash',
-      'gemini-1.5-pro',
-      'gemini-2.0-flash-exp',
+  # 优先尝试 v1 正式接口，依次兼容处理
+  models_and_versions = [
+      ('v1', 'gemini-1.5-flash'),
+      ('v1', 'gemini-2.0-flash'),
+      ('v1beta', 'gemini-2.0-flash'),
+      ('v1beta', 'gemini-1.5-flash-latest'),
+      ('v1', 'gemini-1.5-pro'),
   ]
 
-  for model_name in models_to_try:
+  for version, model_name in models_and_versions:
     try:
-      url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}'
+      url = f'https://generativelanguage.googleapis.com/{version}/models/{model_name}:generateContent?key={api_key}'
       headers = {'Content-Type': 'application/json'}
       payload = {'contents': [{'parts': [{'text': prompt}]}]}
 
       resp = requests.post(url, headers=headers, json=payload, timeout=12)
-      print(f'试图调用模型 {model_name}，状态码: {resp.status_code}')
+      print(f'尝试接口 {version}/models/{model_name}，状态码: {resp.status_code}')
       if resp.status_code == 200:
         data = resp.json()
         candidates = data.get('candidates', [])
@@ -160,9 +163,9 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
           if parts:
             return parts[0].get('text', '')
       else:
-        print(f'模型 {model_name} 返回错误信息: {resp.text}')
+        print(f'接口 {version}/{model_name} 错误: {resp.text[:150]}')
     except Exception as e:
-      print(f'模型 {model_name} 异常: {e}')
+      print(f'接口 {version}/{model_name} 异常: {e}')
 
   return '（Gemini API 响应异常，已自动切换使用数学模型推算结果）'
 
