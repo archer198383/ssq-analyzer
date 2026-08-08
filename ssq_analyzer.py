@@ -14,7 +14,6 @@ def fetch_ssq_history(limit=50):
     headers = {
         'User-Agent': (
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            ' (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
     }
     resp = requests.get(url, headers=headers, timeout=8)
@@ -42,40 +41,7 @@ def fetch_ssq_history(limit=50):
   except Exception as e:
     print(f'新浪 API 抓取提示: {e}')
 
-  # 接口 2：中国福彩官方 API
-  try:
-    url = f'http://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name=ssq&issueCount={limit}'
-    headers = {
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        ),
-        'Referer': 'http://www.cwl.gov.cn/ygwc/jc/ssq/',
-    }
-    resp = requests.get(url, headers=headers, timeout=8)
-    if resp.status_code == 200:
-      data = resp.json()
-      result_list = data.get('result', [])
-      if result_list:
-        records = []
-        for item in result_list:
-          red_str = item.get('red', '')
-          blue_str = item.get('blue', '')
-          if red_str and blue_str:
-            reds = sorted([int(x) for x in red_str.split(',')])
-            blue = int(blue_str)
-            records.append({
-                'issue': str(item.get('code')),
-                'date': str(item.get('date', '')).split('(')[0],
-                'reds': reds,
-                'blue': blue,
-            })
-        if len(records) > 0:
-          return pd.DataFrame(records).sort_values(by='issue', ascending=True).reset_index(drop=True)
-  except Exception as e:
-    print(f'福彩 API 抓取提示: {e}')
-
   # 保底历史数据集
-  print('网络接口请求超时，启动保底数据库推算...')
   fallback_data =,
           'blue': 6,
       },
@@ -102,7 +68,6 @@ def fetch_ssq_history(limit=50):
 
 
 def calculate_ac_value(reds):
-  """计算 AC 值（复杂度/散度指标）"""
   diffs = set()
   for i in range(len(reds)):
     for j in range(i + 1, len(reds)):
@@ -111,7 +76,6 @@ def calculate_ac_value(reds):
 
 
 def calculate_zone_ratio(reds):
-  """计算三区比（一区:01-11, 二区:12-22, 三区:23-33）"""
   z1 = sum(1 for x in reds if 1 <= x <= 11)
   z2 = sum(1 for x in reds if 12 <= x <= 22)
   z3 = sum(1 for x in reds if 23 <= x <= 33)
@@ -119,7 +83,6 @@ def calculate_zone_ratio(reds):
 
 
 def calculate_012_road(reds):
-  """计算 012 路分布（除以 3 的余数分布）"""
   r0 = sum(1 for x in reds if x % 3 == 0)
   r1 = sum(1 for x in reds if x % 3 == 1)
   r2 = sum(1 for x in reds if x % 3 == 2)
@@ -127,7 +90,6 @@ def calculate_012_road(reds):
 
 
 def markov_chain_analysis(df):
-  """马尔可夫链状态转移概率分析"""
   red_transition_probs = {}
   for num in range(1, 34):
     appear_series = [1 if num in row['reds'] else 0 for _, row in df.iterrows()]
@@ -144,7 +106,6 @@ def markov_chain_analysis(df):
 
 
 def process_data(df):
-  """丰富衍生数据指标"""
   df['sum_red'] = df['reds'].apply(sum)
   df['span_red'] = df['reds'].apply(lambda x: max(x) - min(x))
   df['ac_value'] = df['reds'].apply(calculate_ac_value)
@@ -154,7 +115,6 @@ def process_data(df):
 
 
 def generate_dantuo_recommendation(df, transition_probs):
-  """生成胆拖组合方案（选 2 胆码 + 8 拖码）"""
   total_issues = len(df)
   scores = {}
   for num in range(1, 34):
@@ -170,7 +130,6 @@ def generate_dantuo_recommendation(df, transition_probs):
 
 
 def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
-  """调用 Gemini REST API 进行数据建模分析与逻辑研判"""
   api_key = os.environ.get('GEMINI_API_KEY')
   if not api_key:
     return '（未检测到 GEMINI_API_KEY 环境变量，跳过 AI 推演）'
@@ -183,19 +142,16 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
     ])
 
     prompt = f"""
-你是一位精准的数据统计与彩票概率分析专家。以下是最新开奖数据指标：
-
+你是一位彩票概率分析专家。以下是最新开奖数据：
 {recent_records_str}
 
-数学马尔可夫链与遗漏模型计算得出的初步胆拖推荐为：
-* 推荐红胆码（2码）：{dan_reds}
-* 推荐红拖码（8码）：{tuo_reds}
+计算得出的胆拖推荐：
+红胆码：{dan_reds}
+红拖码：{tuo_reds}
 
-请根据以上三区比分布、012路走势、AC值散度以及冷热号规律，对本期走势进行简要专业研判（150字以内），并给出你调整后的【Gemini 最终精选推荐号码】：
-1. 精选 6+1 单式推荐组合
-2. 简要分析推导依据
+请进行简要分析，并给出精选推荐。
 """
-    url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}'
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}'
     headers = {'Content-Type': 'application/json'}
     payload = {'contents': [{'parts': [{'text': prompt}]}]}
 
@@ -204,20 +160,15 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
       data = resp.json()
       candidates = data.get('candidates', [])
       if candidates:
-        text = (
-            candidates[0]
-            .get('content', {})
-            .get('parts', [])[0]
-            .get('text', '')
-        )
-        return text
-    return f'（Gemini API 响应状态码 {resp.status_code}，使用纯数学模型预测）'
+        parts = candidates[0].get('content', {}).get('parts', [])
+        if parts:
+          return parts[0].get('text', '')
+    return f'（Gemini API 响应状态: {resp.status_code}，使用数学推算结果）'
   except Exception as e:
-    return f'（Gemini API 调用提示: {e}）'
+    return f'（Gemini API 异常: {e}）'
 
 
 def generate_readme_report(df, dan_reds, tuo_reds, ai_analysis):
-  """生成 README.md 展示 Markdown 报告"""
   latest = df.iloc[-1]
   now_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 
@@ -249,7 +200,6 @@ def generate_readme_report(df, dan_reds, tuo_reds, ai_analysis):
 | 期号 | 开奖日期 | 红球 1~6 | 蓝球 | 和值 | 跨度 | AC值 | 三区比 | 012路 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 """
-
   for _, row in df.tail(10).iloc[::-1].iterrows():
     reds_str = ' '.join([f'{x:02d}' for x in row['reds']])
     markdown_content += f"| {row['issue']} | {row['date']} | {reds_str} | `{row['blue']:02d}` | {row['sum_red']} | {row['span_red']} | {row['ac_value']} | {row['zone_ratio']} | {row['road_012']} |\n"
