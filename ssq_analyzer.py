@@ -41,7 +41,7 @@ def fetch_ssq_history(limit=50):
   except Exception as e:
     print(f'新浪 API 抓取提示: {e}')
 
-  # 保底历史数据集（采用安全格式化字符串）
+  # 保底历史数据集（安全转换格式）
   print('网络接口请求超时，启动保底数据库推算...')
   r1 = list(map(int, '2,8,15,21,26,31'.split(',')))
   r2 = list(map(int, '5,11,14,19,27,33'.split(',')))
@@ -124,14 +124,13 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
   if not api_key:
     return '（未检测到 GEMINI_API_KEY 环境变量，跳过 AI 推演）'
 
-  try:
-    recent_records_str = '\n'.join([
-        f"期号 {r['issue']}: 红球 {r['reds']} | 蓝球 {r['blue']} | 三区比"
-        f" {r['zone_ratio']} | 012路 {r['road_012']} | AC值 {r['ac_value']}"
-        for _, r in df.tail(10).iterrows()
-    ])
+  recent_records_str = '\n'.join([
+      f"期号 {r['issue']}: 红球 {r['reds']} | 蓝球 {r['blue']} | 三区比"
+      f" {r['zone_ratio']} | 012路 {r['road_012']} | AC值 {r['ac_value']}"
+      for _, r in df.tail(10).iterrows()
+  ])
 
-    prompt = f"""
+  prompt = f"""
 你是一位彩票概率分析专家。以下是最新开奖数据：
 {recent_records_str}
 
@@ -141,21 +140,26 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
 
 请进行简要分析，并给出精选推荐。
 """
-    url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}'
-    headers = {'Content-Type': 'application/json'}
-    payload = {'contents': [{'parts': [{'text': prompt}]}]}
+  models_to_try = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
 
-    resp = requests.post(url, headers=headers, json=payload, timeout=15)
-    if resp.status_code == 200:
-      data = resp.json()
-      candidates = data.get('candidates', [])
-      if candidates:
-        parts = candidates[0].get('content', {}).get('parts', [])
-        if parts:
-          return parts[0].get('text', '')
-    return f'（Gemini API 响应状态: {resp.status_code}，使用数学推算结果）'
-  except Exception as e:
-    return f'（Gemini API 异常: {e}）'
+  for model_name in models_to_try:
+    try:
+      url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}'
+      headers = {'Content-Type': 'application/json'}
+      payload = {'contents': [{'parts': [{'text': prompt}]}]}
+
+      resp = requests.post(url, headers=headers, json=payload, timeout=15)
+      if resp.status_code == 200:
+        data = resp.json()
+        candidates = data.get('candidates', [])
+        if candidates:
+          parts = candidates[0].get('content', {}) .get('parts', [])
+          if parts:
+            return parts[0].get('text', '')
+    except Exception as e:
+      print(f'模型 {model_name} 尝试提示: {e}')
+
+  return '（Gemini API 响应异常，已自动切换使用数学模型推算结果）'
 
 
 def generate_readme_report(df, dan_reds, tuo_reds, ai_analysis):
