@@ -138,15 +138,14 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
 
 请进行简要分析，并给出精选推荐。
 """
-  # 优先尝试 v1 正式接口，依次兼容处理
   models_and_versions = [
+      ('v1beta', 'gemini-1.5-flash'),
       ('v1', 'gemini-1.5-flash'),
-      ('v1', 'gemini-2.0-flash'),
-      ('v1beta', 'gemini-2.0-flash'),
-      ('v1beta', 'gemini-1.5-flash-latest'),
+      ('v1beta', 'gemini-2.0-flash-exp'),
       ('v1', 'gemini-1.5-pro'),
   ]
 
+  debug_info = []
   for version, model_name in models_and_versions:
     try:
       url = f'https://generativelanguage.googleapis.com/{version}/models/{model_name}:generateContent?key={api_key}'
@@ -154,7 +153,6 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
       payload = {'contents': [{'parts': [{'text': prompt}]}]}
 
       resp = requests.post(url, headers=headers, json=payload, timeout=12)
-      print(f'尝试接口 {version}/models/{model_name}，状态码: {resp.status_code}')
       if resp.status_code == 200:
         data = resp.json()
         candidates = data.get('candidates', [])
@@ -163,11 +161,14 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
           if parts:
             return parts[0].get('text', '')
       else:
-        print(f'接口 {version}/{model_name} 错误: {resp.text[:150]}')
+        err_msg = resp.json().get('error', {}).get('message', resp.text[:100])
+        debug_info.append(
+            f'{version}/{model_name} ({resp.status_code}: {err_msg})'
+        )
     except Exception as e:
-      print(f'接口 {version}/{model_name} 异常: {e}')
+      debug_info.append(f'{version}/{model_name} ({e})')
 
-  return '（Gemini API 响应异常，已自动切换使用数学模型推算结果）'
+  return f"（Gemini API 响应提示: {'; '.join(debug_info)}）"
 
 
 def generate_readme_report(df, dan_reds, tuo_reds, ai_analysis):
