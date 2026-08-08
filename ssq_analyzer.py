@@ -42,27 +42,16 @@ def fetch_ssq_history(limit=50):
     print(f'新浪 API 抓取提示: {e}')
 
   # 保底历史数据集
-  fallback_data =,
-          'blue': 6,
-      },
-      {
-          'issue': '2026086',
-          'date': '2026-08-04',
-          'reds':,
-          'blue': 12,
-      },
-      {
-          'issue': '2026087',
-          'date': '2026-08-06',
-          'reds':,
-          'blue': 9,
-      },
-      {
-          'issue': '2026088',
-          'date': '2026-08-08',
-          'reds':,
-          'blue': 15,
-      },
+  print('网络接口请求超时，启动保底数据库推算...')
+  r1 =
+  r2 =
+  r3 =
+  r4 =
+  fallback_data = [
+      {'issue': '2026085', 'date': '2026-08-02', 'reds': r1, 'blue': 6},
+      {'issue': '2026086', 'date': '2026-08-04', 'reds': r2, 'blue': 12},
+      {'issue': '2026087', 'date': '2026-08-06', 'reds': r3, 'blue': 9},
+      {'issue': '2026088', 'date': '2026-08-08', 'reds': r4, 'blue': 15},
   ]
   return pd.DataFrame(fallback_data).sort_values(by='issue', ascending=True).reset_index(drop=True)
 
