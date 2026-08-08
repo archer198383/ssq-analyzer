@@ -136,52 +136,37 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
 红胆码：{dan_reds}
 红拖码：{tuo_reds}
 
-请进行简要分析，并给出精选推荐。
+请进行简要分析，并给出精选推荐（150字以内）。
 """
-  # 1. 动态查询当前 API Key 绑定的可调用模型列表
-  valid_models = []
+  # 尝试官方 SDK
   try:
-    list_url = (
-        f'https://generativelanguage.googleapis.com/v1beta/models?key={api_key}'
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
     )
-    list_resp = requests.get(list_url, timeout=10)
-    if list_resp.status_code == 200:
-      models_data = list_resp.json().get('models', [])
-      for m in models_data:
-        m_name = m.get('name', '')
-        methods = m.get('supportedGenerationMethods', [])
-        if 'generateContent' in methods and m_name:
-          valid_models.append(m_name)
+    if response and response.text:
+      return response.text
   except Exception as e:
-    print(f'动态拉取模型列表提示: {e}')
+    print(f'SDK 调用提示: {e}')
 
-  # 2. 优先使用动态匹配到的可用模型名称
-  if valid_models:
-    for model_full_name in valid_models[:3]:
-      try:
-        url = f'https://generativelanguage.googleapis.com/v1beta/{model_full_name}:generateContent?key={api_key}'
-        headers = {'Content-Type': 'application/json'}
-        payload = {'contents': [{'parts': [{'text': prompt}]}]}
+  # 尝试 REST API
+  models = [
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+  ]
+  headers = {'Content-Type': 'application/json'}
+  payload = {'contents': [{'parts': [{'text': prompt}]}]}
 
-        resp = requests.post(url, headers=headers, json=payload, timeout=15)
-        if resp.status_code == 200:
-          data = resp.json()
-          candidates = data.get('candidates', [])
-          if candidates:
-            parts = candidates[0].get('content', {}).get('parts', [])
-            if parts:
-              return parts[0].get('text', '')
-      except Exception as ex:
-        print(f'动态模型 {model_full_name} 异常: {ex}')
-
-  # 3. 保底格式请求
-  fallback_models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash']
-  for m_str in fallback_models:
+  err_details = []
+  for m in models:
     try:
-      url = f'https://generativelanguage.googleapis.com/v1beta/models/{m_str}:generateContent?key={api_key}'
-      headers = {'Content-Type': 'application/json'}
-      payload = {'contents': [{'parts': [{'text': prompt}]}]}
-      resp = requests.post(url, headers=headers, json=payload, timeout=15)
+      url = f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}'
+      resp = requests.post(url, headers=headers, json=payload, timeout=12)
       if resp.status_code == 200:
         data = resp.json()
         candidates = data.get('candidates', [])
@@ -189,10 +174,13 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
           parts = candidates[0].get('content', {}).get('parts', [])
           if parts:
             return parts[0].get('text', '')
-    except Exception as e:
-      print(f'保底模型尝试提示: {e}')
+      else:
+        msg = resp.json().get('error', {}).get('message', resp.text[:80])
+        err_details.append(f'{m}({resp.status_code}:{msg})')
+    except Exception as ex:
+      err_details.append(f'{m}({ex})')
 
-  return '（Gemini API 密钥已激活，系统已同步完成数据推算）'
+  return f"（Gemini API 响应诊断: {'; '.join(err_details)}）"
 
 
 def generate_readme_report(df, dan_reds, tuo_reds, ai_analysis):
