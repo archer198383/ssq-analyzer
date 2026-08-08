@@ -125,6 +125,9 @@ def generate_readme_report(df, red_stats, blue_stats, rec_reds, rec_blues):
       red_stats.keys(), key=lambda x: red_stats[x]['freq'], reverse=True
   )[:5]
 
+  rec_reds_str = ' '.join([f'`{n:02d}`' for n in rec_reds])
+  rec_blues_str = ' '.join([f'`{n:02d}`' for n in rec_blues])
+
   markdown_content = f"""# 🎱 双色球数据分析与趋势推算系统
 
 > **自动更新时间**：`{now_str}` （云端自动监测运行）
@@ -144,8 +147,8 @@ def generate_readme_report(df, red_stats, blue_stats, rec_reds, rec_blues):
 ---
 
 ### 🔮 下期概率推算与参考组合
-* **精选推荐红球（6码）**：`{rec_reds[0]:02d}` `{rec_reds:02d}` `{rec_reds:02d}` `{rec_reds:02d}` `{rec_reds:02d}` `{rec_reds:02d}`
-* **推荐参考蓝球（2码）**：`{rec_blues[0]:02d}` `{rec_blues:02d}`
+* **精选推荐红球（6码）**：{rec_reds_str}
+* **推荐参考蓝球（2码）**：{rec_blues_str}
 
 ---
 
