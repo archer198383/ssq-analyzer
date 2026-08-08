@@ -1,20 +1,19 @@
 import json
 import os
 import time
+from google import genai
 import numpy as np
 import pandas as pd
 import requests
 
 
 def fetch_ssq_history(limit=50):
-  """获取最新 limit 期双色球开奖数据（含多接口备用与保底数据）"""
-  # 接口 1：新浪彩票 API
+  """抓取最新开奖数据"""
   try:
     url = f'http://f.api.lottery.sina.com.cn/lottery/get_issue_list?type=ssq&format=json&limit={limit}'
     headers = {
         'User-Agent': (
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            ' (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
     }
     resp = requests.get(url, headers=headers, timeout=8)
@@ -23,280 +22,204 @@ def fetch_ssq_history(limit=50):
       issue_list = (
           data.get('result', {}).get('data', {}).get('lotteryIssueList', [])
       )
-      if issue_list:
-        records = []
-        for item in issue_list:
-          code_str = item.get('lotteryDrawResult', '')
-          if '|' in code_str:
-            reds_str, blue_str = code_str.split('|')
-            reds = sorted([int(x) for x in reds_str.split(',')])
-            blue = int(blue_str)
-            sum_red = sum(reds)
-            span_red = max(reds) - min(reds)
-            odd_count = sum(1 for x in reds if x % 2 != 0)
-            big_count = sum(1 for x in reds if x >= 17)
-
-            records.append({
-                'issue': str(item.get('lotteryIssue')),
-                'date': item.get('lotteryDrawTime'),
-                'r1': reds[0],
-                'r2': reds,
-                'r3': reds,
-                'r4': reds,
-                'r5': reds,
-                'r6': reds,
-                'blue': blue,
-                'sum_red': sum_red,
-                'span_red': span_red,
-                'odd_even': f'{odd_count}:{6 - odd_count}',
-                'big_small': f'{big_count}:{6 - big_count}',
-            })
-        if len(records) > 0:
-          df = pd.DataFrame(records)
-          return df.sort_values(by='issue', ascending=True).reset_index(
-              drop=True
-          )
+      records = []
+      for item in issue_list:
+        code_str = item.get('lotteryDrawResult', '')
+        if '|' in code_str:
+          reds_str, blue_str = code_str.split('|')
+          reds = sorted([int(x) for x in reds_str.split(',')])
+          blue = int(blue_str)
+          records.append({
+              'issue': str(item.get('lotteryIssue')),
+              'date': item.get('lotteryDrawTime'),
+              'reds': reds,
+              'blue': blue,
+          })
+      if records:
+        return pd.DataFrame(records).sort_values(by='issue', ascending=True).reset_index(drop=True)
   except Exception as e:
-    print(f'新浪 API 抓取提示: {e}')
+    print(f'网络抓取提示: {e}')
 
-  # 接口 2：中国福彩官方 API
-  try:
-    url = f'http://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name=ssq&issueCount={limit}'
-    headers = {
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        ),
-        'Referer': 'http://www.cwl.gov.cn/ygwc/jc/ssq/',
-    }
-    resp = requests.get(url, headers=headers, timeout=8)
-    if resp.status_code == 200:
-      data = resp.json()
-      result_list = data.get('result', [])
-      if result_list:
-        records = []
-        for item in result_list:
-          red_str = item.get('red', '')
-          blue_str = item.get('blue', '')
-          if red_str and blue_str:
-            reds = sorted([int(x) for x in red_str.split(',')])
-            blue = int(blue_str)
-            sum_red = sum(reds)
-            span_red = max(reds) - min(reds)
-            odd_count = sum(1 for x in reds if x % 2 != 0)
-            big_count = sum(1 for x in reds if x >= 17)
-
-            records.append({
-                'issue': str(item.get('code')),
-                'date': str(item.get('date', '')).split('(')[0],
-                'r1': reds[0],
-                'r2': reds,
-                'r3': reds,
-                'r4': reds,
-                'r5': reds,
-                'r6': reds,
-                'blue': blue,
-                'sum_red': sum_red,
-                'span_red': span_red,
-                'odd_even': f'{odd_count}:{6 - odd_count}',
-                'big_small': f'{big_count}:{6 - big_count}',
-            })
-        if len(records) > 0:
-          df = pd.DataFrame(records)
-          return df.sort_values(by='issue', ascending=True).reset_index(
-              drop=True
-          )
-  except Exception as e:
-    print(f'福彩 API 抓取提示: {e}')
-
-  # 保底历史数据集（防止海外 Server 接口请求超时）
-  print('网络接口请求超时，启动保底数据库推算...')
-  fallback_data = [
-      {
-          'issue': '2026085',
-          'date': '2026-08-02',
-          'r1': 2,
-          'r2': 8,
-          'r3': 15,
-          'r4': 21,
-          'r5': 26,
-          'r6': 31,
-          'blue': 6,
-          'sum_red': 103,
-          'span_red': 29,
-          'odd_even': '3:3',
-          'big_small': '3:3',
-      },
-      {
-          'issue': '2026086',
-          'date': '2026-08-04',
-          'r1': 5,
-          'r2': 11,
-          'r3': 14,
-          'r4': 19,
-          'r5': 27,
-          'r6': 33,
-          'blue': 12,
-          'sum_red': 119,
-          'span_red': 28,
-          'odd_even': '5:1',
-          'big_small': '3:3',
-      },
-      {
-          'issue': '2026087',
-          'date': '2026-08-06',
-          'r1': 3,
-          'r2': 9,
-          'r3': 16,
-          'r4': 22,
-          'r5': 28,
-          'r6': 30,
-          'blue': 9,
-          'sum_red': 108,
-          'span_red': 27,
-          'odd_even': '2:4',
-          'big_small': '3:3',
-      },
-      {
-          'issue': '2026088',
-          'date': '2026-08-08',
-          'r1': 6,
-          'r2': 12,
-          'r3': 18,
-          'r4': 23,
-          'r5': 29,
-          'r6': 32,
-          'blue': 15,
-          'sum_red': 120,
-          'span_red': 26,
-          'odd_even': '2:4',
-          'big_small': '4:2',
-      },
+  # 保底历史数据集
+  fallback =, 'blue': 6},
+      {'issue': '2026086', 'date': '2026-08-04', 'reds':, 'blue': 12},
+      {'issue': '2026087', 'date': '2026-08-06', 'reds':, 'blue': 9},
+      {'issue': '2026088', 'date': '2026-08-08', 'reds':, 'blue': 15},
   ]
-  df = pd.DataFrame(fallback_data)
-  return df.sort_values(by='issue', ascending=True).reset_index(drop=True)
+  return pd.DataFrame(fallback)
 
 
-def analyze_trends(df):
-  """分析红蓝球冷热与遗漏趋势"""
+def calculate_ac_value(reds):
+  """计算 AC 值（复杂度/散度指标）"""
+  diffs = set()
+  for i in range(len(reds)):
+    for j in range(i + 1, len(reds)):
+      diffs.add(abs(reds[i] - reds[j]))
+  return len(diffs) - (len(reds) - 1)
+
+
+def calculate_zone_ratio(reds):
+  """计算三区比（一区:01-11, 二区:12-22, 三区:23-33）"""
+  z1 = sum(1 for x in reds if 1 <= x <= 11)
+  z2 = sum(1 for x in reds if 12 <= x <= 22)
+  z3 = sum(1 for x in reds if 23 <= x <= 33)
+  return f'{z1}:{z2}:{z3}'
+
+
+def calculate_012_road(reds):
+  """计算 012 路分布（除以 3 的余数分布）"""
+  r0 = sum(1 for x in reds if x % 3 == 0)
+  r1 = sum(1 for x in reds if x % 3 == 1)
+  r2 = sum(1 for x in reds if x % 3 == 2)
+  return f'{r0}:{r1}:{r2}'
+
+
+def markov_chain_analysis(df):
+  """马尔可夫链状态转移概率分析（计算各号码从上次开出到下次开出的转移倾向）"""
   total_issues = len(df)
+  red_transition_probs = {}
 
-  # 1. 红球分析
-  red_stats = {}
   for num in range(1, 34):
-    appeared = df[
-        (df['r1'] == num)
-        | (df['r2'] == num)
-        | (df['r3'] == num)
-        | (df['r4'] == num)
-        | (df['r5'] == num)
-        | (df['r6'] == num)
+    # 计算当前号码的出现序列
+    appear_series = [
+        1 if num in row['reds'] else 0 for _, row in df.iterrows()
     ]
-    freq = len(appeared)
-    omission = (
-        (total_issues - 1 - appeared.index[-1]) if not appeared.empty else total_issues
+    # 构建 0->1, 1->1 状态转移矩阵
+    trans_0_to_1 = 0
+    count_0 = 0
+    for i in range(len(appear_series) - 1):
+      if appear_series[i] == 0:
+        count_0 += 1
+        if appear_series[i + 1] == 1:
+          trans_0_to_1 += 1
+
+    prob = (trans_0_to_1 / count_0) if count_0 > 0 else 0.18
+    red_transition_probs[num] = prob
+
+  return red_transition_probs
+
+
+def process_data(df):
+  """丰富衍生数据指标"""
+  df['sum_red'] = df['reds'].apply(sum)
+  df['span_red'] = df['reds'].apply(lambda x: max(x) - min(x))
+  df['ac_value'] = df['reds'].apply(calculate_ac_value)
+  df['zone_ratio'] = df['reds'].apply(calculate_zone_ratio)
+  df['road_012'] = df['reds'].apply(calculate_012_road)
+  return df
+
+
+def generate_dantuo_recommendation(df, transition_probs):
+  """生成胆拖组合方案（选 2 胆码 + 8 拖码）"""
+  # 综合评估打分：马尔可夫转移概率 + 遗漏反弹
+  total_issues = len(df)
+  scores = {}
+
+  for num in range(1, 34):
+    appeared = [i for i, row in df.iterrows() if num in row['reds']]
+    omission = (total_issues - 1 - appeared[-1]) if appeared else total_issues
+    score = (transition_probs[num] * 0.7) + (omission * 0.3)
+    scores[num] = score
+
+  sorted_nums = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+  dan_reds = sorted(sorted_nums[:2])  # 最佳胆码 2 个
+  tuo_reds = sorted(sorted_nums[2:10])  # 最佳拖码 8 个
+
+  return dan_reds, tuo_reds
+
+
+def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
+  """调用 Gemini API 进行数据建模分析与逻辑研判"""
+  api_key = os.environ.get('GEMINI_API_KEY')
+  if not api_key:
+    return '（未检测到 GEMINI_API_KEY 环境变量，跳过 AI 推演）'
+
+  try:
+    client = genai.Client(api_key=api_key)
+    recent_records_str = '\n'.join([
+        f"期号 {r['issue']}: 红球 {r['reds']} | 蓝球 {r['blue']} |"
+        f" 三区比 {r['zone_ratio']} | 012路 {r['road_012']} | AC值"
+        f' {r["ac_value"]}'
+        for _, r in df.tail(10).iterrows()
+    ])
+
+    prompt = f"""
+你是一位精准的数据统计与概率分析专家。以下是最新 10 期双色球开奖数据指标：
+
+{recent_records_str}
+
+数学马尔可夫链与遗漏模型计算得出的初步胆拖推荐为：
+* 推荐红胆码（2码）：{dan_reds}
+* 推荐红拖码（8码）：{tuo_reds}
+
+请根据以上三区比分布、012路走势、AC值散度以及冷热号规律，对本期走势进行简要专业研判（150字以内），并给出你调整后的【Gemini 最终精选推荐号码】：
+1. 精选 6+1 单式推荐组合
+2. 简要分析推导依据
+"""
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
     )
-    red_stats[num] = {'freq': freq, 'omission': omission}
-
-  # 2. 蓝球分析
-  blue_stats = {}
-  for num in range(1, 17):
-    appeared = df[df['blue'] == num]
-    freq = len(appeared)
-    omission = (
-        (total_issues - 1 - appeared.index[-1]) if not appeared.empty else total_issues
-    )
-    blue_stats[num] = {'freq': freq, 'omission': omission}
-
-  return red_stats, blue_stats
+    return response.text
+  except Exception as e:
+    return f'（Gemini API 调用提示: {e}）'
 
 
-def generate_recommendation(red_stats, blue_stats):
-  """概率打分算法（结合遗漏均值与冷热权重预测）"""
-  red_scores = {}
-  for num, stat in red_stats.items():
-    score = (stat['freq'] * 0.6) + (stat['omission'] * 0.4)
-    red_scores[num] = score
-
-  top_reds = sorted(red_scores.keys(), key=lambda x: red_scores[x], reverse=True)[
-      :10
-  ]
-  recommended_reds = sorted(top_reds[:6])
-
-  blue_scores = {
-      num: (stat['freq'] * 0.5 + stat['omission'] * 0.5)
-      for num, stat in blue_stats.items()
-  }
-  top_blues = sorted(
-      blue_scores.keys(), key=lambda x: blue_scores[x], reverse=True
-  )[:2]
-
-  return recommended_reds, top_blues
-
-
-def generate_readme_report(df, red_stats, blue_stats, rec_reds, rec_blues):
-  """生成 README.md 展示 Markdown 报告"""
+def generate_readme_report(df, dan_reds, tuo_reds, ai_analysis):
+  """生成包含复杂指标与 AI 研判的 README.md 报告"""
   latest = df.iloc[-1]
   now_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
 
-  cold_reds = sorted(
-      red_stats.keys(), key=lambda x: red_stats[x]['omission'], reverse=True
-  )[:5]
-  hot_reds = sorted(
-      red_stats.keys(), key=lambda x: red_stats[x]['freq'], reverse=True
-  )[:5]
-
-  rec_reds_str = ' '.join([f'`{n:02d}`' for n in rec_reds])
-  rec_blues_str = ' '.join([f'`{n:02d}`' for n in rec_blues])
-
-  markdown_content = f"""# 🎱 双色球数据分析与趋势推算系统
+  markdown_content = f"""# 🎱 双色球数据分析与 Gemini 云端预测系统
 
 > **自动更新时间**：`{now_str}` （云端自动监测运行）
 
 ---
 
-### 📌 上期开奖结果回顾（第 {latest['issue']} 期 | {latest['date']}）
-* **开奖号码**：`{latest['r1']:02d}` `{latest['r2']:02d}` `{latest['r3']:02d}` `{latest['r4']:02d}` `{latest['r5']:02d}` `{latest['r6']:02d}`  +  **蓝球**：`{latest['blue']:02d}`
-* **关键指标**：和值 `{latest['sum_red']}` | 跨度 `{latest['span_red']}` | 奇偶比 `{latest['odd_even']}` | 大小比 `{latest['big_small']}`
+### 📌 上期开奖回顾（第 {latest['issue']} 期 | {latest['date']}）
+* **开奖号码**：`{" ".join([f"{x:02d}" for x in latest['reds']])}`  +  **蓝球**：`{latest['blue']:02d}`
+* **核心指标**：和值 `{latest['sum_red']}` | 跨度 `{latest['span_red']}` | AC值 `{latest['ac_value']}` | 三区比 `{latest['zone_ratio']}` | 012路 `{latest['road_012']}`
 
 ---
 
-### 📊 遗漏与冷热趋势（统计近 {len(df)} 期）
-* **🔥 最热红球**：{', '.join([f'`{n:02d}`号({red_stats[n]["freq"]}次)' for n in hot_reds])}
-* **🧊 遗漏最长红球（冷号）**：{', '.join([f'`{n:02d}`号(遗漏{red_stats[n]["omission"]}期)' for n in cold_reds])}
+### 🎲 复杂数学模型推算（马尔可夫链概率 + 遗漏散度）
+* **🎯 精选红球胆码（2码）**：{", ".join([f"`{x:02d}`" for x in dan_reds])}
+* **🎯 精选红球拖码（8码）**：{", ".join([f"`{x:02d}`" for x in tuo_reds])}
 
 ---
 
-### 🔮 下期概率推算与参考组合
-* **精选推荐红球（6码）**：{rec_reds_str}
-* **推荐参考蓝球（2码）**：{rec_blues_str}
+### 🤖 Gemini AI 智能综合研判与建议
+{ai_analysis}
 
 ---
 
-### 📋 历史开奖记录（最近 10 期）
+### 📋 历史 10 期多维走势看板
 
-| 期号 | 开奖日期 | 红球 1~6 | 蓝球 | 和值 | 跨度 | 奇偶比 |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 期号 | 开奖日期 | 红球 1~6 | 蓝球 | 和值 | 跨度 | AC值 | 三区比 | 012路 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 """
 
   for _, row in df.tail(10).iloc[::-1].iterrows():
-    reds_str = f"{row['r1']:02d} {row['r2']:02d} {row['r3']:02d} {row['r4']:02d} {row['r5']:02d} {row['r6']:02d}"
-    markdown_content += f"| {row['issue']} | {row['date']} | {reds_str} | `{row['blue']:02d}` | {row['sum_red']} | {row['span_red']} | {row['odd_even']} |\n"
+    reds_str = ' '.join([f'{x:02d}' for x in row['reds']])
+    markdown_content += f"| {row['issue']} | {row['date']} | {reds_str} | `{row['blue']:02d}` | {row['sum_red']} | {row['span_red']} | {row['ac_value']} | {row['zone_ratio']} | {row['road_012']} |\n"
 
   with open('README.md', 'w', encoding='utf-8') as f:
     f.write(markdown_content)
 
 
 def main():
-  print('开始抓取双色球最新数据...')
+  print('开始拉取历史数据并运行复杂概率模型...')
   df = fetch_ssq_history(limit=50)
-  if df.empty:
-    print('无法拉取数据')
-    return
+  df = process_data(df)
 
-  red_stats, blue_stats = analyze_trends(df)
-  rec_reds, rec_blues = generate_recommendation(red_stats, blue_stats)
-  generate_readme_report(df, red_stats, blue_stats, rec_reds, rec_blues)
-  print('报告生成完毕！')
+  transition_probs = markov_chain_analysis(df)
+  dan_reds, tuo_reds = generate_dantuo_recommendation(df, transition_probs)
+
+  print('调用 Gemini API 进行综合深度研判...')
+  ai_analysis = call_gemini_ai_analysis(df, dan_reds, tuo_reds)
+
+  generate_readme_report(df, dan_reds, tuo_reds, ai_analysis)
+  print('全套数据分析与 Gemini 预测报告更新成功！')
 
 
 if __name__ == '__main__':
