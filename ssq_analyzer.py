@@ -70,7 +70,7 @@ def fetch_ssq_history(limit=50):
   except Exception as e:
     print(f'新浪接口抓取提示: {e}')
 
-  # 保底历史数据集
+  # 保底历史数据集（包含最近 10 期精准日期）
   print('网络接口请求超时，启动保底数据库推算...')
   fallback_data = [
       {
@@ -201,22 +201,21 @@ def generate_dantuo_recommendation(df, transition_probs):
 
 def generate_top5_combinations(dan_reds, tuo_reds):
   """根据胆拖矩阵推导高概率的 5 注单式参考组合 (6+1)"""
+  combos_indices =
   all_tuo_combos = list(itertools.combinations(tuo_reds, 4))
-  selected_5_reds = [
-      sorted(dan_reds + list(all_tuo_combos[0])),
-      sorted(dan_reds + list(all_tuo_combos)),
-      sorted(dan_reds + list(all_tuo_combos)),
-      sorted(dan_reds + list(all_tuo_combos)),
-      sorted(
-          dan_reds + list(all_tuo_combos[40 if len(all_tuo_combos) > 40 else -1])
-      ),
-  ]
 
   blues = list(map(int, '1,2,6,9,12'.split(',')))
   top5_combinations = []
-  for i in range(5):
-    red_str = ' '.join([f'{x:02d}' for x in selected_5_reds[i]])
-    blue_str = f'{blues[i]:02d}'
+
+  for idx in range(5):
+    c_idx = combos_indices[idx]
+    if c_idx >= len(all_tuo_combos):
+      c_idx = idx % len(all_tuo_combos)
+    tuo_part = list(all_tuo_combos[c_idx])
+    combined_reds = sorted(dan_reds + tuo_part)
+
+    red_str = ' '.join([f'{x:02d}' for x in combined_reds])
+    blue_str = f'{blues[idx]:02d}'
     top5_combinations.append((red_str, blue_str))
 
   return top5_combinations
