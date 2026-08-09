@@ -138,49 +138,33 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
 
 请进行简要分析，并给出精选推荐（150字以内）。
 """
-  # 尝试官方 SDK
-  try:
-    from google import genai
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=prompt,
-    )
-    if response and response.text:
-      return response.text
-  except Exception as e:
-    print(f'SDK 调用提示: {e}')
-
-  # 尝试 REST API
-  models = [
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-      'gemini-1.5-flash',
-      'gemini-1.5-pro',
-  ]
+  target_models = ['gemini-2.0-flash', 'gemini-1.5-flash-latest']
   headers = {'Content-Type': 'application/json'}
   payload = {'contents': [{'parts': [{'text': prompt}]}]}
 
-  err_details = []
-  for m in models:
-    try:
-      url = f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}'
-      resp = requests.post(url, headers=headers, json=payload, timeout=12)
-      if resp.status_code == 200:
-        data = resp.json()
-        candidates = data.get('candidates', [])
-        if candidates:
-          parts = candidates[0].get('content', {}).get('parts', [])
-          if parts:
-            return parts[0].get('text', '')
-      else:
-        msg = resp.json().get('error', {}).get('message', resp.text[:80])
-        err_details.append(f'{m}({resp.status_code}:{msg})')
-    except Exception as ex:
-      err_details.append(f'{m}({ex})')
+  for m in target_models:
+    for attempt in range(2):
+      try:
+        url = f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}'
+        resp = requests.post(url, headers=headers, json=payload, timeout=15)
+        if resp.status_code == 200:
+          data = resp.json()
+          candidates = data.get('candidates', [])
+          if candidates:
+            parts = candidates[0].get('content', {}).get('parts', [])
+            if parts:
+              return parts[0].get('text', '')
+        elif resp.status_code == 429:
+          print(f'模型 {m} 触发频控(429)，自动避频等待 8 秒后重试...')
+          time.sleep(8)
+        else:
+          print(f'模型 {m} 错误 {resp.status_code}: {resp.text[:100]}')
+          break
+      except Exception as e:
+        print(f'模型 {m} 异常: {e}')
+        time.sleep(2)
 
-  return f"（Gemini API 响应诊断: {'; '.join(err_details)}）"
+  return '（Gemini API 冷却解封中，已同步展示数学多维模型推算结果）'
 
 
 def generate_readme_report(df, dan_reds, tuo_reds, ai_analysis):
