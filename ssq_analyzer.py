@@ -70,7 +70,7 @@ def fetch_ssq_history(limit=50):
   except Exception as e:
     print(f'新浪接口抓取提示: {e}')
 
-  # 保底历史数据集（包含最近 10 期精准日期）
+  # 保底历史数据集
   print('网络接口请求超时，启动保底数据库推算...')
   fallback_data = [
       {
@@ -201,7 +201,7 @@ def generate_dantuo_recommendation(df, transition_probs):
 
 def generate_top5_combinations(dan_reds, tuo_reds):
   """根据胆拖矩阵推导高概率的 5 注单式参考组合 (6+1)"""
-  combos_indices =
+  combos_indices = list(map(int, '0,3,10,25,35'.split(',')))
   all_tuo_combos = list(itertools.combinations(tuo_reds, 4))
 
   blues = list(map(int, '1,2,6,9,12'.split(',')))
