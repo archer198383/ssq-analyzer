@@ -1,6 +1,6 @@
 # 🎱 双色球数据分析与 Gemini 云端预测系统
 
-> **自动更新时间**：`2026-08-09 15:39:08` （云端自动监测运行）
+> **自动更新时间**：`2026-08-09 15:43:23` （云端自动监测运行）
 
 ---
 
@@ -17,7 +17,7 @@
 ---
 
 ### 🤖 Gemini AI 智能综合研判与建议
-（Gemini API 冷却解封中，已同步展示数学多维模型推算结果）
+（Gemini API 返回诊断: gemini-2.5-flash:403(Your project has been denied access. Please contact support.); gemini-1.5-flash:404(models/gemini-1.5-flash is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.)）
 
 ---
 
