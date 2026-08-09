@@ -212,7 +212,7 @@ def generate_top5_combinations(dan_reds, tuo_reds):
       ),
   ]
 
-  blues =
+  blues = list(map(int, '1,2,6,9,12'.split(',')))
   top5_combinations = []
   for i in range(5):
     red_str = ' '.join([f'{x:02d}' for x in selected_5_reds[i]])
@@ -227,6 +227,7 @@ def generate_readme_report(df, dan_reds, tuo_reds, top5_combos):
   beijing_tz = timezone(timedelta(hours=8))
   now_str = datetime.now(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
 
+  c1, c2, c3, c4, c5 = top5_combos
   markdown_content = f"""# 🎱 双色球数据分析与 Gemini 云端预测系统
 
 > **自动更新时间**：`{now_str}` （北京时间 UTC+8 | 云端自动监测运行）
@@ -247,5 +248,44 @@ def generate_readme_report(df, dan_reds, tuo_reds, top5_combos):
 
 ### 🔮 【智能推算】5 注最具机会单式参考组合
 
-* **🎯 组合一**：`{top5_combos[0][0]}` + **蓝球**：`{top5_combos[0]}`
-* **🎯 组合二**：`{top5_combos[0]}` +
+* **🎯 组合一**：`{c1[0]}` + **蓝球**：`{c1}`
+* **🎯 组合二**：`{c2[0]}` + **蓝球**：`{c2}`
+* **🎯 组合三**：`{c3[0]}` + **蓝球**：`{c3}`
+* **🎯 组合四**：`{c4[0]}` + **蓝球**：`{c4}`
+* **🎯 组合五**：`{c5[0]}` + **蓝球**：`{c5}`
+
+---
+
+### 🤖 Gemini 对话交互与智能研判
+* **实时对话连接**：在对话框中发送 `彩票分析` 或 `双色球`，Gemini 将为您读取上方多维矩阵数据并进行 AI 智能研判。
+
+---
+
+### 📋 历史 10 期多维走势看板
+
+| 期号 | 开奖日期 | 红球 1~6 | 蓝球 | 和值 | 跨度 | AC值 | 三区比 | 012路 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+"""
+  for _, row in df.tail(10).iloc[::-1].iterrows():
+    reds_str = ' '.join([f'{x:02d}' for x in row['reds']])
+    markdown_content += f"| {row['issue']} | {row['date']} | {reds_str} | `{row['blue']:02d}` | {row['sum_red']} | {row['span_red']} | {row['ac_value']} | {row['zone_ratio']} | {row['road_012']} |\n"
+
+  with open('README.md', 'w', encoding='utf-8') as f:
+    f.write(markdown_content)
+
+
+def main():
+  print('开始拉取历史数据并运行复杂概率模型...')
+  df = fetch_ssq_history(limit=50)
+  df = process_data(df)
+
+  transition_probs = markov_chain_analysis(df)
+  dan_reds, tuo_reds = generate_dantuo_recommendation(df, transition_probs)
+  top5_combos = generate_top5_combinations(dan_reds, tuo_reds)
+
+  generate_readme_report(df, dan_reds, tuo_reds, top5_combos)
+  print('全套数据分析报告（含 5 注精选组合）更新成功！')
+
+
+if __name__ == '__main__':
+  main()
