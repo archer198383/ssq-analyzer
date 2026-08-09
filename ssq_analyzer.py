@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import itertools
 import json
 import os
 import time
@@ -9,7 +10,6 @@ import requests
 
 def fetch_ssq_history(limit=50):
   """抓取最新开奖数据（含多接口备用与保底数据）"""
-  # 接口 1: 中国福彩官网 API
   headers = {
       'User-Agent': (
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -41,7 +41,6 @@ def fetch_ssq_history(limit=50):
   except Exception as e:
     print(f'福彩官网接口抓取提示: {e}')
 
-  # 接口 2: 新浪彩票 API
   try:
     url = f'http://f.api.lottery.sina.com.cn/lottery/get_issue_list?type=ssq&format=json&limit={limit}'
     resp = requests.get(
@@ -71,7 +70,7 @@ def fetch_ssq_history(limit=50):
   except Exception as e:
     print(f'新浪接口抓取提示: {e}')
 
-  # 保底历史数据集（包含最近 10 期精准日期）
+  # 保底历史数据集
   print('网络接口请求超时，启动保底数据库推算...')
   fallback_data = [
       {
@@ -200,7 +199,30 @@ def generate_dantuo_recommendation(df, transition_probs):
   return dan_reds, tuo_reds
 
 
-def generate_readme_report(df, dan_reds, tuo_reds):
+def generate_top5_combinations(dan_reds, tuo_reds):
+  """根据胆拖矩阵推导高概率的 5 注单式参考组合 (6+1)"""
+  all_tuo_combos = list(itertools.combinations(tuo_reds, 4))
+  selected_5_reds = [
+      sorted(dan_reds + list(all_tuo_combos[0])),
+      sorted(dan_reds + list(all_tuo_combos)),
+      sorted(dan_reds + list(all_tuo_combos)),
+      sorted(dan_reds + list(all_tuo_combos)),
+      sorted(
+          dan_reds + list(all_tuo_combos[40 if len(all_tuo_combos) > 40 else -1])
+      ),
+  ]
+
+  blues =
+  top5_combinations = []
+  for i in range(5):
+    red_str = ' '.join([f'{x:02d}' for x in selected_5_reds[i]])
+    blue_str = f'{blues[i]:02d}'
+    top5_combinations.append((red_str, blue_str))
+
+  return top5_combinations
+
+
+def generate_readme_report(df, dan_reds, tuo_reds, top5_combos):
   latest = df.iloc[-1]
   beijing_tz = timezone(timedelta(hours=8))
   now_str = datetime.now(beijing_tz).strftime('%Y-%m-%d %H:%M:%S')
@@ -223,35 +245,7 @@ def generate_readme_report(df, dan_reds, tuo_reds):
 
 ---
 
-### 🤖 Gemini 对话交互与智能研判
-* **实时对话连接**：在对话框中发送 `双色球` 或 `最新预测`，Gemini 将为您读取上方多维矩阵数据并进行 AI 智能研判。
+### 🔮 【智能推算】5 注最具机会单式参考组合
 
----
-
-### 📋 历史 10 期多维走势看板
-
-| 期号 | 开奖日期 | 红球 1~6 | 蓝球 | 和值 | 跨度 | AC值 | 三区比 | 012路 |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-"""
-  for _, row in df.tail(10).iloc[::-1].iterrows():
-    reds_str = ' '.join([f'{x:02d}' for x in row['reds']])
-    markdown_content += f"| {row['issue']} | {row['date']} | {reds_str} | `{row['blue']:02d}` | {row['sum_red']} | {row['span_red']} | {row['ac_value']} | {row['zone_ratio']} | {row['road_012']} |\n"
-
-  with open('README.md', 'w', encoding='utf-8') as f:
-    f.write(markdown_content)
-
-
-def main():
-  print('开始拉取历史数据并运行复杂概率模型...')
-  df = fetch_ssq_history(limit=50)
-  df = process_data(df)
-
-  transition_probs = markov_chain_analysis(df)
-  dan_reds, tuo_reds = generate_dantuo_recommendation(df, transition_probs)
-
-  generate_readme_report(df, dan_reds, tuo_reds)
-  print('全套数据分析报告更新成功！')
-
-
-if __name__ == '__main__':
-  main()
+* **🎯 组合一**：`{top5_combos[0][0]}` + **蓝球**：`{top5_combos[0]}`
+* **🎯 组合二**：`{top5_combos[0]}` +
