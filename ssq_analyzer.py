@@ -40,6 +40,7 @@ def fetch_ssq_history(limit=50):
   except Exception as e:
     print(f'新浪 API 抓取提示: {e}')
 
+  # 保底历史数据集
   print('网络接口请求超时，启动保底数据库推算...')
   r1 = list(map(int, '2,8,15,21,26,31'.split(',')))
   r2 = list(map(int, '5,11,14,19,27,33'.split(',')))
@@ -138,34 +139,59 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
 
 请进行简要分析，并给出精选推荐（150字以内）。
 """
-  # 优先尝试 SDK
+  # 动态从服务器查询该 API Key 当前真实可用的所有模型名称
+  active_models = []
   try:
-    from google import genai
-
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=prompt,
+    list_url = (
+        f'https://generativelanguage.googleapis.com/v1beta/models?key={api_key}'
     )
-    if response and response.text:
-      return response.text
+    list_resp = requests.get(list_url, timeout=10)
+    if list_resp.status_code == 200:
+      m_list = list_resp.json().get('models', [])
+      for item in m_list:
+        m_name = item.get('name', '')  # 例如 "models/gemini-1.5-flash-latest"
+        methods = item.get('supportedGenerationMethods', [])
+        if 'generateContent' in methods and m_name:
+          active_models.append(m_name)
   except Exception as e:
-    print(f'SDK 提示: {e}')
+    print(f'动态拉取模型列表提示: {e}')
 
-  # 备用 REST API
-  models = [
-      ('v1beta', 'gemini-2.5-flash'),
-      ('v1beta', 'gemini-1.5-flash'),
-      ('v1', 'gemini-1.5-flash'),
-      ('v1beta', 'gemini-2.0-flash'),
+  # 优先调用动态查到的真实可用模型
+  if active_models:
+    for full_m_name in active_models:
+      # 避开 403 被封禁的 2.5 预览模型
+      if '2.5' in full_m_name:
+        continue
+      try:
+        url = f'https://generativelanguage.googleapis.com/v1beta/{full_m_name}:generateContent?key={api_key}'
+        headers = {'Content-Type': 'application/json'}
+        payload = {'contents': [{'parts': [{'text': prompt}]}]}
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=12)
+        if resp.status_code == 200:
+          data = resp.json()
+          candidates = data.get('candidates', [])
+          if candidates:
+            parts = candidates[0].get('content', {}).get('parts', [])
+            if parts:
+              return parts[0].get('text', '')
+      except Exception as ex:
+        print(f'动态模型 {full_m_name} 异常: {ex}')
+
+  # 备用精准全称别名路径
+  fallback_aliases = [
+      'models/gemini-1.5-flash-latest',
+      'models/gemini-1.5-flash-002',
+      'models/gemini-2.0-flash',
+      'models/gemini-1.5-pro-latest',
   ]
   headers = {'Content-Type': 'application/json'}
   payload = {'contents': [{'parts': [{'text': prompt}]}]}
 
   debug_logs = []
-  for ver, m in models:
+  for m_alias in fallback_aliases:
     try:
-      url = f'https://generativelanguage.googleapis.com/{ver}/models/{m}:generateContent?key={api_key}'
+      url = f'https://generativelanguage.googleapis.com/v1beta/{m_alias}:generateContent?key={api_key}'
       resp = requests.post(url, headers=headers, json=payload, timeout=12)
       if resp.status_code == 200:
         data = resp.json()
@@ -176,9 +202,9 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
             return parts[0].get('text', '')
       else:
         err_msg = resp.json().get('error', {}).get('message', resp.text[:60])
-        debug_logs.append(f'{m}:{resp.status_code}({err_msg})')
+        debug_logs.append(f'{m_alias}:{resp.status_code}({err_msg})')
     except Exception as ex:
-      debug_logs.append(f'{m}:{ex}')
+      debug_logs.append(f'{m_alias}:{ex}')
 
   return f"（Gemini API 返回诊断: {'; '.join(debug_logs[:2])}）"
 
