@@ -1,6 +1,6 @@
 # 🎱 双色球数据分析与 Gemini 云端预测系统
 
-> **自动更新时间**：`2026-08-09 15:50:16` （云端自动监测运行）
+> **自动更新时间**：`2026-08-10 00:04:22` （北京时间 UTC+8 | 云端自动监测运行）
 
 ---
 
@@ -16,8 +16,8 @@
 
 ---
 
-### 🤖 Gemini AI 智能综合研判与建议
-（Gemini API 返回诊断: models/gemini-1.5-flash-latest:404(models/gemini-1.5-flash-latest is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.); models/gemini-1.5-flash-002:404(models/gemini-1.5-flash-002 is not found for API version v1beta, or is not supported for generateContent. Call ModelService.ListModels to see the list of available models and their supported methods.)）
+### 🤖 Gemini 对话交互与智能研判
+* **实时对话连接**：在对话框中发送 `双色球` 或 `最新预测`，Gemini 将为您读取上方多维矩阵数据并进行 AI 智能研判。
 
 ---
 
