@@ -138,33 +138,49 @@ def call_gemini_ai_analysis(df, dan_reds, tuo_reds):
 
 请进行简要分析，并给出精选推荐（150字以内）。
 """
-  target_models = ['gemini-2.0-flash', 'gemini-1.5-flash-latest']
+  # 优先尝试 SDK
+  try:
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt,
+    )
+    if response and response.text:
+      return response.text
+  except Exception as e:
+    print(f'SDK 提示: {e}')
+
+  # 备用 REST API
+  models = [
+      ('v1beta', 'gemini-2.5-flash'),
+      ('v1beta', 'gemini-1.5-flash'),
+      ('v1', 'gemini-1.5-flash'),
+      ('v1beta', 'gemini-2.0-flash'),
+  ]
   headers = {'Content-Type': 'application/json'}
   payload = {'contents': [{'parts': [{'text': prompt}]}]}
 
-  for m in target_models:
-    for attempt in range(2):
-      try:
-        url = f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}'
-        resp = requests.post(url, headers=headers, json=payload, timeout=15)
-        if resp.status_code == 200:
-          data = resp.json()
-          candidates = data.get('candidates', [])
-          if candidates:
-            parts = candidates[0].get('content', {}).get('parts', [])
-            if parts:
-              return parts[0].get('text', '')
-        elif resp.status_code == 429:
-          print(f'模型 {m} 触发频控(429)，自动避频等待 8 秒后重试...')
-          time.sleep(8)
-        else:
-          print(f'模型 {m} 错误 {resp.status_code}: {resp.text[:100]}')
-          break
-      except Exception as e:
-        print(f'模型 {m} 异常: {e}')
-        time.sleep(2)
+  debug_logs = []
+  for ver, m in models:
+    try:
+      url = f'https://generativelanguage.googleapis.com/{ver}/models/{m}:generateContent?key={api_key}'
+      resp = requests.post(url, headers=headers, json=payload, timeout=12)
+      if resp.status_code == 200:
+        data = resp.json()
+        candidates = data.get('candidates', [])
+        if candidates:
+          parts = candidates[0].get('content', {}).get('parts', [])
+          if parts:
+            return parts[0].get('text', '')
+      else:
+        err_msg = resp.json().get('error', {}).get('message', resp.text[:60])
+        debug_logs.append(f'{m}:{resp.status_code}({err_msg})')
+    except Exception as ex:
+      debug_logs.append(f'{m}:{ex}')
 
-  return '（Gemini API 冷却解封中，已同步展示数学多维模型推算结果）'
+  return f"（Gemini API 返回诊断: {'; '.join(debug_logs[:2])}）"
 
 
 def generate_readme_report(df, dan_reds, tuo_reds, ai_analysis):
