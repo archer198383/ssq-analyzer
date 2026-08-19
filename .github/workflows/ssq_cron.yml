@@ -33,6 +33,10 @@ jobs:
         run: |
           python ssq_analyzer.py
 
+      - name: 运行 1000 期大规模蒙特卡洛样本外回测检验
+        run: |
+          python backtest_ssq.py
+
       - name: 自动提交并推送 README 报告
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
