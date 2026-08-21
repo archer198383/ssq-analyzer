@@ -77,72 +77,17 @@ def fetch_ssq_history(limit=50):
     # 保底历史数据集
     print('网络接口请求超时，启动保底数据库推算...')
     fallback_data = [
-        {
-            'issue': '2026086',
-            'date': '2026-08-04',
-            'reds': [5, 11, 14, 19, 27, 33],
-            'blue': 12,
-        },
-        {
-            'issue': '2026087',
-            'date': '2026-08-06',
-            'reds':,
-            'blue': 9,
-        },
-        {
-            'issue': '2026088',
-            'date': '2026-08-09',
-            'reds':,
-            'blue': 5,
-        },
-        {
-            'issue': '2026089',
-            'date': '2026-08-11',
-            'reds':,
-            'blue': 3,
-        },
-        {
-            'issue': '2026090',
-            'date': '2026-08-13',
-            'reds':,
-            'blue': 14,
-        },
-        {
-            'issue': '2026091',
-            'date': '2026-08-16',
-            'reds':,
-            'blue': 5,
-        },
-        {
-            'issue': '2026092',
-            'date': '2026-08-18',
-            'reds': [9, 11, 12, 25, 30, 33],
-            'blue': 11,
-        },
-        {
-            'issue': '2026093',
-            'date': '2026-08-13',
-            'reds':,
-            'blue': 4,
-        },
-        {
-            'issue': '2026094',
-            'date': '2026-08-16',
-            'reds':,
-            'blue': 1,
-        },
-        {
-            'issue': '2026095',
-            'date': '2026-08-18',
-            'reds':,
-            'blue': 16,
-        },
-        {
-            'issue': '2026096',
-            'date': '2026-08-20',
-            'reds':,
-            'blue': 4,
-        },
+        {'issue': '2026086', 'date': '2026-08-04', 'reds': [5, 11, 14, 19, 27, 33], 'blue': 12},
+        {'issue': '2026087', 'date': '2026-08-06', 'reds':, 'blue': 9},
+        {'issue': '2026088', 'date': '2026-08-09', 'reds':, 'blue': 5},
+        {'issue': '2026089', 'date': '2026-08-11', 'reds':, 'blue': 3},
+        {'issue': '2026090', 'date': '2026-08-13', 'reds':, 'blue': 14},
+        {'issue': '2026091', 'date': '2026-08-16', 'reds':, 'blue': 5},
+        {'issue': '2026092', 'date': '2026-08-18', 'reds':, 'blue': 11},
+        {'issue': '2026093', 'date': '2026-08-13', 'reds':, 'blue': 4},
+        {'issue': '2026094', 'date': '2026-08-16', 'reds':, 'blue': 1},
+        {'issue': '2026095', 'date': '2026-08-18', 'reds':, 'blue': 16},
+        {'issue': '2026096', 'date': '2026-08-20', 'reds':, 'blue': 4},
     ]
     return pd.DataFrame(fallback_data).sort_values(by='issue', ascending=True).reset_index(drop=True)
 
