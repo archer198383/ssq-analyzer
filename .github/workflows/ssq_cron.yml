@@ -27,15 +27,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 运行分析与推算程序（含 Gemini AI 连接）
+      - name: 运行全套分析、推算与千期回测程序
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python ssq_analyzer.py
-
-      - name: 运行 1000 期大规模蒙特卡洛样本外回测检验
-        run: |
-          python backtest_ssq.py
 
       - name: 自动提交并推送 README 报告
         uses: stefanzweifel/git-auto-commit-action@v5
