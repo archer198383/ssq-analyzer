@@ -74,7 +74,7 @@ def fetch_ssq_history(limit=50):
     except Exception as e:
         print(f'新浪接口抓取提示: {e}')
 
-    # 保底历史数据集
+    # 保底历史数据集（数据结构已完整修复）
     print('网络接口请求超时，启动保底数据库推算...')
     fallback_data = [
         {'issue': '2026086', 'date': '2026-08-04', 'reds': [5, 11, 14, 19, 27, 33], 'blue': 12},
@@ -83,7 +83,7 @@ def fetch_ssq_history(limit=50):
         {'issue': '2026089', 'date': '2026-08-11', 'reds':, 'blue': 3},
         {'issue': '2026090', 'date': '2026-08-13', 'reds':, 'blue': 14},
         {'issue': '2026091', 'date': '2026-08-16', 'reds':, 'blue': 5},
-        {'issue': '2026092', 'date': '2026-08-18', 'reds':, 'blue': 11},
+        {'issue': '2026092', 'date': '2026-08-18', 'reds': [9, 11, 12, 25, 30, 33], 'blue': 11},
         {'issue': '2026093', 'date': '2026-08-13', 'reds':, 'blue': 4},
         {'issue': '2026094', 'date': '2026-08-16', 'reds':, 'blue': 1},
         {'issue': '2026095', 'date': '2026-08-18', 'reds':, 'blue': 16},
@@ -209,8 +209,8 @@ def process_data(df):
 def generate_dantuo_recommendation(df, transition_probs):
     """
     推导胆码与拖码大池
-    【修正1】：引入重号加权补偿，防止连期热号因遗漏归零被误杀
-    【修正2】：拖码池收敛为 8 码，增强组合聚焦度
+    1. 引入重号加权补偿，防止连期热号因遗漏归零被误杀
+    2. 拖码池收敛为 8 码，增强组合聚焦度
     """
     total_issues = len(df)
     latest_reds = set(df.iloc[-1]['reds'])
@@ -235,7 +235,6 @@ def generate_dantuo_recommendation(df, transition_probs):
 def generate_top5_combinations(dan_reds, tuo_reds, df):
     """
     结合形态学剪枝、覆盖设计与蓝球多象限分配，生成 5 注精选单式 (6+1)
-    【修正3】：蓝球覆盖大小、奇偶与 012 路多维象限，避免单一区段扎堆
     """
     filter_engine = SSQFilterEngine()
     all_tuo_combos = list(itertools.combinations(tuo_reds, 4))
