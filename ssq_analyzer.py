@@ -161,24 +161,20 @@ class SSQFilterEngine:
 
     def validate(self, reds):
         """校验红球组合是否符合大概率形态"""
-        # 1. 和值过滤
         total_sum = sum(reds)
         if not (self.sum_min <= total_sum <= self.sum_max):
             return False
 
-        # 2. 奇偶比过滤
         odd_count = sum(1 for r in reds if r % 2 != 0)
         even_count = 6 - odd_count
         if (odd_count, even_count) not in self.valid_odd_even:
             return False
 
-        # 3. 大小比过滤 (01-16为小，17-33为大)
         small_count = sum(1 for r in reds if r <= 16)
         big_count = 6 - small_count
         if (small_count, big_count) not in self.valid_size:
             return False
 
-        # 4. 连号过滤 (防4连号及以上)
         sorted_r = sorted(reds)
         streak = max_streak = 1
         for i in range(len(sorted_r) - 1):
@@ -190,12 +186,10 @@ class SSQFilterEngine:
         if max_streak > self.max_consecutive:
             return False
 
-        # 5. 反大众扎堆 (等差数列过滤)
         diffs = [sorted_r[i+1] - sorted_r[i] for i in range(len(sorted_r)-1)]
         if len(set(diffs)) == 1:
             return False
 
-        # 6. 同尾号分布过滤 (单尾数出现不能超过3个)
         tails = [r % 10 for r in reds]
         if max(tails.count(t) for t in set(tails)) > 3:
             return False
@@ -270,7 +264,7 @@ def process_data(df):
 def generate_dantuo_recommendation(df, transition_probs):
     """
     推导胆码与拖码大池
-    【修正1】：引入重号加权补偿（对上期开出的红球给予动态加分，防止连期热号因遗漏归零被过滤）
+    【修正1】：引入重号加权补偿，防止连期热号因遗漏归零被误杀
     【修正2】：拖码池收敛为 8 码，增强组合聚焦度
     """
     total_issues = len(df)
@@ -281,10 +275,7 @@ def generate_dantuo_recommendation(df, transition_probs):
         appeared = [i for i, row in df.iterrows() if num in row['reds']]
         omission = (total_issues - 1 - appeared[-1]) if appeared else total_issues
         
-        # 基础得分：转移概率 70% + 遗漏值 30%
         base_score = (transition_probs[num] * 0.7) + (omission * 0.3)
-        
-        # 重号动态补偿
         if num in latest_reds:
             base_score += 1.5
             
@@ -292,7 +283,7 @@ def generate_dantuo_recommendation(df, transition_probs):
 
     sorted_nums = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
     dan_reds = sorted(sorted_nums[:2])
-    tuo_reds = sorted(sorted_nums[2:10])  # 收敛至 8 码
+    tuo_reds = sorted(sorted_nums[2:10])
     return dan_reds, tuo_reds
 
 
@@ -304,14 +295,12 @@ def generate_top5_combinations(dan_reds, tuo_reds, df):
     filter_engine = SSQFilterEngine()
     all_tuo_combos = list(itertools.combinations(tuo_reds, 4))
 
-    # 1. 过滤出所有符合形态学大概率区间的组合
     valid_combos = []
     for tuo_part in all_tuo_combos:
         comb = sorted(dan_reds + list(tuo_part))
         if filter_engine.validate(comb):
             valid_combos.append(comb)
 
-    # 2. 若严格过滤组合不足 5 注，则适度补齐
     if len(valid_combos) < 5:
         for tuo_part in all_tuo_combos:
             comb = sorted(dan_reds + list(tuo_part))
@@ -320,7 +309,6 @@ def generate_top5_combinations(dan_reds, tuo_reds, df):
             if len(valid_combos) >= 5:
                 break
 
-    # 3. 计算蓝球历史热度与遗漏，优选 5 个差异化多象限蓝球
     total_issues = len(df)
     blue_scores = {}
     for b in range(1, 17):
@@ -330,7 +318,9 @@ def generate_top5_combinations(dan_reds, tuo_reds, df):
         blue_scores[b] = (freq_b * 0.6) + (omission_b * 0.4)
 
     sorted_blues = sorted(blue_scores.keys(), key=lambda x: blue_scores[x], reverse=True)
-    selected_blues = sorted_blues[:5]
+    selected_blues =
+    if len(sorted_blues) >= 5:
+        selected_blues = sorted_blues[:5]
 
     strategy_labels = [
         "奇偶与和值平衡型",
@@ -412,7 +402,6 @@ def run_large_scale_backtest(df_history: pd.DataFrame, lookback_window: int = 50
             idx = np.where(window_reds[:, num] == 1)[0]
             last_seen[num] = (lookback_window - 1 - idx[-1]) if len(idx) > 0 else lookback_window
 
-        # 包含重号补偿打分
         scores = trans_probs * 0.7 + last_seen * 0.3
         for num_idx in last_draw_reds:
             scores[num_idx] += 1.5
@@ -500,6 +489,13 @@ def generate_readme_report(df, dan_reds, tuo_reds, top5_combos, backtest_stats):
     except Exception:
         target_issue_str = "最新期"
 
+    p4_m = backtest_stats['model_prizes'].get(4, 0)
+    p4_r = backtest_stats['random_prizes'].get(4, 0)
+    p5_m = backtest_stats['model_prizes'].get(5, 0)
+    p5_r = backtest_stats['random_prizes'].get(5, 0)
+    p6_m = backtest_stats['model_prizes'].get(6, 0)
+    p6_r = backtest_stats['random_prizes'].get(6, 0)
+
     markdown_content = f"""# 🎱 双色球数据分析与 Gemini 云端预测系统
 
 > **自动更新时间**：`{now_str}` （北京时间 UTC+8 | 云端自动监测运行）
@@ -539,9 +535,9 @@ def generate_readme_report(df, dan_reds, tuo_reds, top5_combos, backtest_stats):
 | **蓝球命中率** | `{backtest_stats['model_blue_rate']:.2f}%` | `{backtest_stats['random_blue_rate']:.2f}%` | 理论期望 6.25% (1/16) |
 
 **🏆 各奖级命中注数对比**：
-* **四等奖 (200元)**：模型 `{backtest_stats['model_prizes']} 注` | 随机机选 `{backtest_stats['random_prizes']} 注`
-* **五等奖 (10元)**：模型 `{backtest_stats['model_prizes']} 注` | 随机机选 `{backtest_stats['random_prizes']} 注`
-* **六等奖 (5元)**：模型 `{backtest_stats['model_prizes']} 注` | 随机机选 `{backtest_stats['random_prizes']} 注`
+* **四等奖 (200元)**：模型 `{p4_m} 注` | 随机机选 `{p4_r} 注`
+* **五等奖 (10元)**：模型 `{p5_m} 注` | 随机机选 `{p5_r} 注`
+* **六等奖 (5元)**：模型 `{p6_m} 注` | 随机机选 `{p6_r} 注`
 
 ---
 
