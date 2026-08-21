@@ -72,9 +72,8 @@ def fetch_ssq_history(limit=50):
     except Exception as e:
         print(f'新浪接口抓取提示: {e}')
 
-    # 保底历史数据集：采用字符串安全解析，杜绝语法截断错误
     print('网络接口请求超时，启动保底数据库推算...')
-    fallback_raw = [
+    fallback_raw = (
         ('2026086', '2026-08-04', '5,11,14,19,27,33', 12),
         ('2026087', '2026-08-06', '3,9,16,22,28,30', 9),
         ('2026088', '2026-08-09', '6,7,11,18,22,33', 5),
@@ -86,13 +85,13 @@ def fetch_ssq_history(limit=50):
         ('2026094', '2026-08-16', '6,13,15,17,24,25', 1),
         ('2026095', '2026-08-18', '4,6,14,21,22,33', 16),
         ('2026096', '2026-08-20', '1,4,16,22,26,31', 4),
-    ]
+    )
     fallback_data = []
     for iss, dt, r_str, b_val in fallback_raw:
         fallback_data.append({
             'issue': iss,
             'date': dt,
-            'reds': [int(x) for x in r_str.split(',')],
+            'reds': list(map(int, r_str.split(','))),
             'blue': b_val
         })
     return pd.DataFrame(fallback_data).sort_values(by='issue', ascending=True).reset_index(drop=True)
@@ -100,18 +99,13 @@ def fetch_ssq_history(limit=50):
 
 class SSQFilterEngine:
     """形态学剪枝、极端形态过滤与博弈论反扎堆过滤器"""
-    def __init__(
-        self,
-        sum_range=(75, 130),
-        max_consecutive=3
-    ):
+    def __init__(self, sum_range=(75, 130), max_consecutive=3):
         self.sum_min, self.sum_max = sum_range
         self.max_consecutive = max_consecutive
         self.valid_odd_even = {(3, 3), (2, 4), (4, 2)}
         self.valid_size = {(3, 3), (2, 4), (4, 2)}
 
     def validate(self, reds):
-        """校验红球组合是否符合大概率形态"""
         total_sum = sum(reds)
         if not (self.sum_min <= total_sum <= self.sum_max):
             return False
@@ -149,7 +143,6 @@ class SSQFilterEngine:
 
 
 def calculate_prize(red_hits: int, blue_hit: bool):
-    """官方中奖规则与返奖金额计算"""
     if red_hits == 6 and blue_hit:
         return 1, 5000000
     elif red_hits == 6 and not blue_hit:
@@ -213,11 +206,6 @@ def process_data(df):
 
 
 def generate_dantuo_recommendation(df, transition_probs):
-    """
-    推导胆码与拖码大池
-    1. 引入重号加权补偿，防止连期热号因遗漏归零被误杀
-    2. 拖码池收敛为 8 码，增强组合聚焦度
-    """
     total_issues = len(df)
     latest_reds = set(df.iloc[-1]['reds'])
 
@@ -225,11 +213,9 @@ def generate_dantuo_recommendation(df, transition_probs):
     for num in range(1, 34):
         appeared = [i for i, row in df.iterrows() if num in row['reds']]
         omission = (total_issues - 1 - appeared[-1]) if appeared else total_issues
-        
         base_score = (transition_probs[num] * 0.7) + (omission * 0.3)
         if num in latest_reds:
             base_score += 1.5
-            
         scores[num] = base_score
 
     sorted_nums = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
@@ -239,9 +225,6 @@ def generate_dantuo_recommendation(df, transition_probs):
 
 
 def generate_top5_combinations(dan_reds, tuo_reds, df):
-    """
-    结合形态学剪枝、覆盖设计与蓝球多象限分配，生成 5 注精选单式 (6+1)
-    """
     filter_engine = SSQFilterEngine()
     all_tuo_combos = list(itertools.combinations(tuo_reds, 4))
 
@@ -268,17 +251,17 @@ def generate_top5_combinations(dan_reds, tuo_reds, df):
         blue_scores[b] = (freq_b * 0.6) + (omission_b * 0.4)
 
     sorted_blues = sorted(blue_scores.keys(), key=lambda x: blue_scores[x], reverse=True)
-    selected_blues =
+    selected_blues = list(map(int, "12,2,6,7,8".split(",")))
     if len(sorted_blues) >= 5:
         selected_blues = sorted_blues[:5]
 
-    strategy_labels = [
+    strategy_labels = (
         "奇偶与和值平衡型",
         "冷热搭配与重号防守型",
         "三区均衡与同尾优化型",
         "012路平衡机选型 1",
         "012路平衡机选型 2"
-    ]
+    )
 
     top5_combinations = []
     for idx in range(5):
@@ -298,7 +281,6 @@ def generate_top5_combinations(dan_reds, tuo_reds, df):
 
 
 def run_large_scale_backtest(df_history: pd.DataFrame, lookback_window: int = 50, test_issues: int = 500):
-    """向量化快速执行 500~1000 期样本外滚动蒙特卡洛回测"""
     total_len = len(df_history)
     if total_len < test_issues + lookback_window:
         needed = (test_issues + lookback_window) - total_len
@@ -352,7 +334,6 @@ def run_large_scale_backtest(df_history: pd.DataFrame, lookback_window: int = 50
             idx = np.where(window_reds[:, num] == 1)[0]
             last_seen[num] = (lookback_window - 1 - idx[-1]) if len(idx) > 0 else lookback_window
 
-        # 包含重号补偿打分
         scores = trans_probs * 0.7 + last_seen * 0.3
         for num_idx in last_draw_reds:
             scores[num_idx] += 1.5
