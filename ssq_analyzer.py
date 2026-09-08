@@ -121,7 +121,7 @@ class QuantitativeEngine:
         """科学形态过滤 + 博弈论去热门化"""
         feats = cls.extract_features(reds, blue)
         
-        # 1. 过滤偏离正态分布的极端和值（双色球理论期望均值 102，核心概率区间 80-130）
+        # 1. 过滤偏离正态分布的极端和值（核心概率区间 80-130，仅作为内部约束）
         if not (80 <= feats["sum"] <= 130):
             return False
             
@@ -142,8 +142,7 @@ class QuantitativeEngine:
             return False
             
         # 6. 博弈论/期望收益（EV）去热门化：
-        # 大众偏好 1-31 的生日号码，若开出容易造成数百人均分奖池。
-        # 适度偏好包含 32、33 号码的高熵组合，提升独占大奖期望。
+        # 适度规避全由 1-31 生日号构成的组合，配置高位号码以降低均分头奖风险
         if feats["birthday_count"] == 6 and random.random() < 0.65:
             return False
             
@@ -170,28 +169,23 @@ def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Tuple[List[int],
         return "> ⚠️ 未检测到 `GEMINI_API_KEY` 环境变量，跳过 AI 研判生成。"
 
     try:
-        # 使用最新的 google-genai 客户端接口
         client = genai.Client(api_key=api_key)
-        
-        # 提取近 5 期开奖简要
         recent_df = df.tail(5)[["issue", "date", "r1", "r2", "r3", "r4", "r5", "r6", "blue"]]
         recent_records = recent_df.to_dict(orient="records")
         
         summary_prompt = f"""
-你是一位拥有深厚数理统计与博弈论背景的彩票量化精算分析师。
-请根据以下双色球真实历史开奖数据和量化模型筛选出的候选组合，撰写一份客观、专业的推演研判报告（250-400字）。
+你是一位专业的彩票量化精算分析师。请结合双色球历史客观数据与最新候选组合，提供简要的数理推演点评（150-250字）。
 
-【最新5期历史开奖】：
+【最新5期开奖数据】：
 {recent_records}
 
-【量化缩水与博弈去热门化筛选出的候选组合】：
-{[{"reds": c[0], "blue": c, "features": c} for c in candidates]}
+【候选组合】：
+{[{"reds": c[0], "blue": c} for c in candidates]}
 
 【要求】：
-1. 明确指出独立随机摇奖的无记忆性与客观概率特性，杜绝虚假预测。
-2. 从和值均值回归、奇偶平衡、三区分布等数理角度简析。
-3. 从博弈论视角阐释：避开1-31大众生日号高密集组合对于提高独占头奖期望收益（EV）的数学意义。
-4. 语言客观严谨，排版清晰。
+1. 语言简练客观，严禁绝对化预测。
+2. 简评上期形态偏离（如三区、连号）对当期均值回归的指引。
+3. 从博弈论角度简述避开大众集中选号对期望收益（EV）的意义。
 """
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -202,7 +196,7 @@ def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Tuple[List[int],
         return f"> ⚠️ Gemini AI 研判生成提示: {str(e)}"
 
 # ----------------------------------------------------------------------
-# 4. 主流程：计算、汇总并生成 README.md
+# 4. 主流程：极简看板输出
 # ----------------------------------------------------------------------
 def main():
     print("=== 开始运行双色球量化分析工作流 ===")
@@ -216,62 +210,60 @@ def main():
         
     latest = df.iloc[-1]
     latest_reds = [int(latest[f"r{i}"]) for i in range(1, 7)]
-    print(f"最新一期: {latest['issue']} ({latest['date']}) | 红球: {latest_reds} | 蓝球: {latest['blue']}")
+    latest_blue = int(latest["blue"])
+    latest_feats = QuantitativeEngine.extract_features(latest_reds, latest_blue)
     
-    # 筛选候选注码
+    print(f"最新一期: {latest['issue']} ({latest['date']}) | 红球: {latest_reds} | 蓝球: {latest_blue}")
+    
+    # 筛选 5 组精选候选组合
     candidates = QuantitativeEngine.generate_candidate_pool(n_picks=5)
     
     # 调用 Gemini AI 分析
     ai_commentary = generate_gemini_analysis(df, candidates)
     
-    # 组装 Markdown 看板
-    current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    # 组装极简 Markdown 看板
+    current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
+    next_issue = int(latest['issue']) + 1 if str(latest['issue']).isdigit() else "下期"
+    
     lines = [
-        "# 🔴🔵 双色球专业量化推演与博弈分析看板",
+        "# 🔴🔵 双色球量化分析看板",
         "",
-        f"> 🕒 **最后更新时间**：`{current_time_str}`  ",
-        f"> 📊 **历史样本库**：已收录 `{len(df)}` 期历史官方开奖数据（SQLite + Pandas 高速计算）",
-        "",
-        "---",
-        "",
-        "### 📌 官方上一期开奖结果",
-        f"- **开奖期号**：`{latest['issue']}` 期（{latest['date']}）",
-        f"- **开奖红球**：{' '.join(f'`{x:02d}`' for x in latest_reds)}",
-        f"- **开奖蓝球**：`{int(latest['blue']):02d}`",
-        f"- **奖池累积**：约 `{latest['pool']}` 元",
+        f"> 🕒 **更新时间**：`{current_time_str}` ｜ **期号**：第 `{next_issue}` 期推演",
         "",
         "---",
         "",
-        "### 🎯 下期量化缩水与 EV 优化推荐组合",
-        "| 编号 | 推荐红球组合 (6码) | 蓝球 | 和值 | 跨度 | 奇偶比 | AC值 | 三区比 |",
-        "| :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: |"
+        f"### 📋 上期开奖总结（第 `{latest['issue']}` 期）",
+        f"- **开奖号码**：红球 {' '.join(f'`{x:02d}`' for x in latest_reds)} ｜ 蓝球 `{latest_blue:02d}`",
+        f"- **奖池滚存**：约 `{latest['pool']}` 元",
+        f"- **形态特征**：三区比 `{latest_feats['zone_ratio']}` ｜ 奇偶比 `{latest_feats['odd_even']}` ｜ 连号组数 `{latest_feats['consecutive']}` ｜ 跨度 `{latest_feats['span']}` ｜ AC值 `{latest_feats['ac_value']}`",
+        "",
+        "---",
+        "",
+        "### 🎯 本期推荐组合",
+        "| 编号 | 推荐红球 (6码) | 蓝球 |",
+        "| :---: | :--- | :---: |"
     ]
     
-    for i, (reds, blue, feats) in enumerate(candidates, 1):
+    for i, (reds, blue, _) in enumerate(candidates, 1):
         red_str = " ".join(f"`{x:02d}`" for x in reds)
-        lines.append(
-            f"| {i} | {red_str} | `{blue:02d}` | {feats['sum']} | {feats['span']} | {feats['odd_even']} | {feats['ac_value']} | {feats['zone_ratio']} |"
-        )
+        lines.append(f"| **{i:02d}** | {red_str} | `{blue:02d}` |")
         
     lines.extend([
         "",
-        "> **筛选准则**：和值正态分布区间（80-130）、跨度适中（18-30）、AC复杂度约束（≥6）、博弈去热门化（规避1-31全生日号密集区，降低头奖平分风险）。",
-        "",
         "---",
         "",
-        "### 🧠 Gemini AI 专家量化研判",
-        "",
+        "### 💡 核心推演要点",
         ai_commentary,
         "",
         "---",
         "",
-        "<sub>*免责声明：本系统基于数理统计与博弈论模型生成，旨在提供科学量化分析视角，随机摇奖请理性对待。*</sub>"
+        "<sub>*免责声明：彩票为独立随机事件，量化模型旨在科学缩水与优化期望收益，请理性看待。*</sub>"
     ])
     
     with open("README.md", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
         
-    print("[Done] README.md 生成完毕，工作流就绪。")
+    print("[Done] 极简看板 README.md 已生成完毕。")
 
 if __name__ == "__main__":
     main()
