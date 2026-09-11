@@ -55,7 +55,7 @@ class SSQDataManager:
                                 INSERT OR IGNORE INTO lottery_records 
                                 (issue, date, r1, r2, r3, r4, r5, r6, blue, sales, pool)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (issue, date, reds[0], reds, reds, reds[3], reds[4], reds[5], 
+                            """, (issue, date, reds[0], reds, reds, reds, reds[4], reds[5], 
                                   blue, item.get("sales", "0"), item.get("poolmoney", "0")))
                     conn.commit()
                 print("[OK] 官方最新开奖数据已同步入库。")
@@ -121,7 +121,7 @@ class QuantitativeEngine:
         """科学形态过滤 + 博弈论去热门化"""
         feats = cls.extract_features(reds, blue)
         
-        # 1. 过滤偏离正态分布的极端和值（核心概率区间 80-130，仅作为内部约束）
+        # 1. 过滤偏离正态分布的极端和值（核心概率区间 80-130，仅作为内部过滤）
         if not (80 <= feats["sum"] <= 130):
             return False
             
@@ -196,7 +196,7 @@ def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Tuple[List[int],
         return f"> ⚠️ Gemini AI 研判生成提示: {str(e)}"
 
 # ----------------------------------------------------------------------
-# 4. 主流程：极简看板输出
+# 4. 主流程：极简自适应卡片看板输出（无表格，防左右拉动）
 # ----------------------------------------------------------------------
 def main():
     print("=== 开始运行双色球量化分析工作流 ===")
@@ -221,7 +221,7 @@ def main():
     # 调用 Gemini AI 分析
     ai_commentary = generate_gemini_analysis(df, candidates)
     
-    # 组装极简 Markdown 看板
+    # 组装极简 Markdown 看板（方案二：卡片式列表）
     current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
     next_issue = int(latest['issue']) + 1 if str(latest['issue']).isdigit() else "下期"
     
@@ -239,14 +239,14 @@ def main():
         "",
         "---",
         "",
-        "### 🎯 本期推荐组合",
-        "| 编号 | 推荐红球 (6码) | 蓝球 |",
-        "| :---: | :--- | :---: |"
+        "### 🎯 本期推荐组合（卡片式）",
+        ""
     ]
     
+    # 方案二：生成纯自适应卡片式列表（不产生任何横向滑动条）
     for i, (reds, blue, _) in enumerate(candidates, 1):
         red_str = " ".join(f"`{x:02d}`" for x in reds)
-        lines.append(f"| **{i:02d}** | {red_str} | `{blue:02d}` |")
+        lines.append(f"* 🔴 **第 {i:02d} 注**：{red_str} ＋ 🔵 `{blue:02d}`")
         
     lines.extend([
         "",
@@ -263,7 +263,7 @@ def main():
     with open("README.md", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
         
-    print("[Done] 极简看板 README.md 已生成完毕。")
+    print("[Done] 方案二卡片式 README.md 已生成完毕。")
 
 if __name__ == "__main__":
     main()
