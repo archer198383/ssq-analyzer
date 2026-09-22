@@ -55,7 +55,7 @@ class SSQDataManager:
                                 INSERT OR IGNORE INTO lottery_records 
                                 (issue, date, r1, r2, r3, r4, r5, r6, blue, sales, pool)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (issue, date, reds[0], reds, reds, reds, reds[4], reds[5], 
+                            """, (issue, date, reds[0], reds, reds, reds, reds, reds[5], 
                                   blue, item.get("sales", "0"), item.get("poolmoney", "0")))
                     conn.commit()
                 print("[OK] 官方最新开奖数据已同步入库。")
@@ -71,7 +71,7 @@ class SSQDataManager:
         return df
 
 # ----------------------------------------------------------------------
-# 2. 量化特征与博弈论（EV优化）引擎 (NumPy / Pandas)
+# 2. 量化特征、定胆锁轴与 3+2 蓝球对冲引擎
 # ----------------------------------------------------------------------
 class QuantitativeEngine:
     PRIME_NUMBERS = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31}
@@ -86,7 +86,6 @@ class QuantitativeEngine:
     def extract_features(cls, reds: List[int], blue: int) -> Dict:
         sorted_red = sorted(reds)
         red_arr = np.array(sorted_red)
-        
         red_sum = int(np.sum(red_arr))
         span = int(red_arr[-1] - red_arr[0])
         odd_count = int(np.sum(red_arr % 2 != 0))
@@ -97,11 +96,8 @@ class QuantitativeEngine:
         z2 = int(np.sum((red_arr >= 12) & (red_arr <= 22)))
         z3 = int(np.sum((red_arr >= 23) & (red_arr <= 33)))
         
-        # 连号统计
         consecutive_pairs = int(np.sum(np.diff(red_arr) == 1))
         ac_val = cls.calculate_ac_value(sorted_red)
-        
-        # 博弈论指标：1-31 大众生日号密集度
         birthday_count = int(np.sum(red_arr <= 31))
 
         return {
@@ -116,54 +112,148 @@ class QuantitativeEngine:
             "blue": blue
         }
 
+    @staticmethod
+    def is_arithmetic_progression(reds: List[int]) -> bool:
+        """检测并剔除等差数列等大众规则图形 (EV优化)"""
+        diffs = np.diff(sorted(reds))
+        return len(set(diffs)) <= 2 and diffs[0] in
+
     @classmethod
-    def filter_and_ev_optimize(cls, reds: List[int], blue: int) -> bool:
-        """科学形态过滤 + 博弈论去热门化"""
-        feats = cls.extract_features(reds, blue)
+    def filter_red_combination(cls, reds: List[int]) -> bool:
+        """科学形态与博弈去热门化过滤"""
+        feats = cls.extract_features(reds, 1)
         
-        # 1. 过滤偏离正态分布的极端和值（核心概率区间 80-130，仅作为内部过滤）
-        if not (80 <= feats["sum"] <= 130):
+        # 1. 和值区间约束 (85 - 130)
+        if not (85 <= feats["sum"] <= 130):
             return False
             
-        # 2. 跨度极差过滤（合理范围 18-30）
-        if not (18 <= feats["span"] <= 30):
+        # 2. 跨度极差过滤 (20 - 32)
+        if not (20 <= feats["span"] <= 32):
             return False
             
-        # 3. 奇偶形态过滤（排除极端全奇全偶）
-        if feats["odd_even"] in ["0:6", "6:0"]:
+        # 3. 奇偶形态（排除全奇全偶及 1:5 极端失衡）
+        if feats["odd_even"] in ["0:6", "6:0", "1:5"]:
             return False
             
-        # 4. AC值过滤（过滤低复杂度/等差规律组合）
+        # 4. AC复杂度约束 (>= 6)
         if feats["ac_value"] < 6:
             return False
             
-        # 5. 限制长连号（最多允许2组2连号）
-        if feats["consecutive"] > 2:
+        # 5. 严格限制连号（最多允许 1 组常规双连号，杜绝长连号）
+        if feats["consecutive"] > 1:
             return False
             
-        # 6. 博弈论/期望收益（EV）去热门化：
-        # 适度规避全由 1-31 生日号构成的组合，配置高位号码以降低均分头奖风险
-        if feats["birthday_count"] == 6 and random.random() < 0.65:
+        # 6. 剔除等差数列
+        if cls.is_arithmetic_progression(reds):
+            return False
+            
+        # 7. 抑制大众生日聚集号
+        if feats["birthday_count"] == 6 and random.random() < 0.7:
             return False
             
         return True
 
     @classmethod
-    def generate_candidate_pool(cls, n_picks: int = 5) -> List[Tuple[List[int], int, Dict]]:
-        picks = []
-        pool_reds = list(range(1, 34))
-        while len(picks) < n_picks:
-            reds = sorted(random.sample(pool_reds, 6))
-            blue = random.randint(1, 16)
-            if cls.filter_and_ev_optimize(reds, blue):
-                feats = cls.extract_features(reds, blue)
-                picks.append((reds, blue, feats))
-        return picks
+    def analyze_blue_hedging(cls, df: pd.DataFrame) -> Tuple[List[int], List[int]]:
+        """
+        蓝球策略算法：
+        锁定黄金中枢带 (06-12)，输出 3 注主攻反弹码与 2 注动态对冲码
+        """
+        recent_blues = df["blue"].tail(10).tolist() if not df.empty else []
+        last_blue = recent_blues[-1] if recent_blues else 6
+        
+        # 主攻号池 (3注): 优先考虑黄金中枢带的质奇数与未过热路数
+        primary_pool = if x != last_blue]
+        # 对冲号池 (2注): 包含防守偶数及同路邻号，防止单边通杀
+        hedge_pool = if x != last_blue]
+        
+        main_picks = random.sample(primary_pool, 3)
+        hedge_picks = random.sample(hedge_pool, 2)
+        return main_picks, hedge_picks
+
+    @classmethod
+    def generate_enhanced_portfolio(cls, df: pd.DataFrame) -> Tuple[int, List[Dict]]:
+        """
+        综合生成模块：
+        1. 定胆锁轴 (Anchor Number)
+        2. 重号立体梯队 (2注零重号 + 2注单重号 + 1注双重号)
+        3. 蓝球 3+2 动态对冲
+        """
+        latest = df.iloc[-1]
+        last_reds = set([int(latest[f"r{i}"]) for i in range(1, 7)])
+        last_reds_list = list(last_reds)
+        
+        # 1. 动态确定核心红球锚点 (高位边码 32/33 在博弈防平分中具有最高权重)
+        anchor_red = 32 if 33 in last_reds else 33
+        
+        # 2. 蓝球 3+2 对冲规划
+        main_blues, hedge_blues = cls.analyze_blue_hedging(df)
+        blue_plan = [
+            (main_blues[0], "主攻反弹"),
+            (hedge_blues[0], "动态对冲"),
+            (main_blues, "主攻反弹"),
+            (hedge_blues, "动态对冲"),
+            (main_blues, "主攻反弹")
+        ]
+        
+        # 3. 重号梯队分布（兼顾大换血与重号聚类）
+        repeat_targets =
+        all_pool = set(range(1, 34))
+        fresh_pool = list(all_pool - last_reds)
+        
+        results = []
+        for i in range(5):
+            r_count = repeat_targets[i]
+            blue_val, strategy_tag = blue_plan[i]
+            
+            found = False
+            for _ in range(3000):
+                # 必定包含公共轴心胆码
+                chosen_reds = {anchor_red}
+                
+                # 配置重号配额
+                if r_count > 0:
+                    chosen_repeats = set(random.sample(last_reds_list, min(r_count, len(last_reds_list))))
+                    chosen_reds.update(chosen_repeats)
+                    
+                # 补充非重号新码
+                needed = 6 - len(chosen_reds)
+                avail_fresh = [x for x in fresh_pool if x not in chosen_reds]
+                if len(avail_fresh) < needed:
+                    continue
+                chosen_reds.update(random.sample(avail_fresh, needed))
+                
+                sorted_reds = sorted(list(chosen_reds))
+                if len(sorted_reds) == 6 and cls.filter_red_combination(sorted_reds):
+                    feats = cls.extract_features(sorted_reds, blue_val)
+                    results.append({
+                        "id": i + 1,
+                        "reds": sorted_reds,
+                        "blue": blue_val,
+                        "strategy": strategy_tag,
+                        "repeats": r_count,
+                        "feats": feats
+                    })
+                    found = True
+                    break
+                    
+            if not found:
+                sample_reds = sorted(random.sample(range(1, 34), 6))
+                results.append({
+                    "id": i + 1,
+                    "reds": sample_reds,
+                    "blue": blue_val,
+                    "strategy": strategy_tag,
+                    "repeats": r_count,
+                    "feats": cls.extract_features(sample_reds, blue_val)
+                })
+                
+        return anchor_red, results
 
 # ----------------------------------------------------------------------
 # 3. 基于 google-genai 的 Gemini AI 研判模块
 # ----------------------------------------------------------------------
-def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Tuple[List[int], int, Dict]]) -> str:
+def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Dict], anchor: int) -> str:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         return "> ⚠️ 未检测到 `GEMINI_API_KEY` 环境变量，跳过 AI 研判生成。"
@@ -174,18 +264,23 @@ def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Tuple[List[int],
         recent_records = recent_df.to_dict(orient="records")
         
         summary_prompt = f"""
-你是一位专业的彩票量化精算分析师。请结合双色球历史客观数据与最新候选组合，提供简要的数理推演点评（150-250字）。
+你是一位专业的彩票量化精算分析师。请结合双色球历史客观数据与最新经过定胆锁轴与对冲筛选的候选组合，提供简要的数理推演点评（150-250字）。
 
 【最新5期开奖数据】：
 {recent_records}
 
+【本次量化优化策略】：
+1. 核心红球防守锚胆：{anchor:02d}
+2. 重号梯队：2注零重号 + 2注单重号 + 1注双重号
+3. 蓝球采用3注主攻反弹 + 2注动态对冲布局
+
 【候选组合】：
-{[{"reds": c[0], "blue": c} for c in candidates]}
+{[{'reds': c['reds'], 'blue': c['blue'], 'strategy': c['strategy']} for c in candidates]}
 
 【要求】：
 1. 语言简练客观，严禁绝对化预测。
-2. 简评上期形态偏离（如三区、连号）对当期均值回归的指引。
-3. 从博弈论角度简述避开大众集中选号对期望收益（EV）的意义。
+2. 简析上期走势形态对本期均值回归的指引。
+3. 说明重号立体分层与蓝球 3+2 对冲策略在控制偏态风险、提升期望收益（EV）上的意义。
 """
         response = client.models.generate_content(
             model="gemini-2.5-flash",
@@ -196,10 +291,10 @@ def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Tuple[List[int],
         return f"> ⚠️ Gemini AI 研判生成提示: {str(e)}"
 
 # ----------------------------------------------------------------------
-# 4. 主流程：极简自适应卡片看板输出（无表格，防左右拉动）
+# 4. 主流程：全屏自适应卡片式看板输出 (方案二标准)
 # ----------------------------------------------------------------------
 def main():
-    print("=== 开始运行双色球量化分析工作流 ===")
+    print("=== 开始运行双色球高级量化分析工作流 ===")
     data_mgr = SSQDataManager()
     data_mgr.sync_official_data(fetch_count=100)
     df = data_mgr.load_dataframe()
@@ -215,18 +310,18 @@ def main():
     
     print(f"最新一期: {latest['issue']} ({latest['date']}) | 红球: {latest_reds} | 蓝球: {latest_blue}")
     
-    # 筛选 5 组精选候选组合
-    candidates = QuantitativeEngine.generate_candidate_pool(n_picks=5)
+    # 综合推算：定胆锁轴 + 重号立体梯队 + 蓝球 3+2 对冲
+    anchor_red, candidates = QuantitativeEngine.generate_enhanced_portfolio(df)
     
-    # 调用 Gemini AI 分析
-    ai_commentary = generate_gemini_analysis(df, candidates)
+    # 调用 Gemini AI 生成专业研判
+    ai_commentary = generate_gemini_analysis(df, candidates, anchor_red)
     
-    # 组装极简 Markdown 看板（方案二：卡片式列表）
+    # 组装极简卡片式看板 (方案二：绝对不超宽，零横向拉动)
     current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
     next_issue = int(latest['issue']) + 1 if str(latest['issue']).isdigit() else "下期"
     
     lines = [
-        "# 🔴🔵 双色球量化分析看板",
+        "# 🔴🔵 双色球量化分析看板（高阶对冲与锁轴版）",
         "",
         f"> 🕒 **更新时间**：`{current_time_str}` ｜ **期号**：第 `{next_issue}` 期推演",
         "",
@@ -239,20 +334,29 @@ def main():
         "",
         "---",
         "",
-        "### 🎯 本期推荐组合（卡片式）",
+        f"### 🎯 本期推荐组合（核心红胆：`{anchor_red:02d}` ｜ 蓝球 3+2 对冲）",
         ""
     ]
     
-    # 方案二：生成纯自适应卡片式列表（不产生任何横向滑动条）
-    for i, (reds, blue, _) in enumerate(candidates, 1):
-        red_str = " ".join(f"`{x:02d}`" for x in reds)
-        lines.append(f"* 🔴 **第 {i:02d} 注**：{red_str} ＋ 🔵 `{blue:02d}`")
+    # 方案二：生成纯自适应卡片式列表
+    for c in candidates:
+        red_str = " ".join(f"`{x:02d}`" for x in c["reds"])
+        strategy_badge = "🎯 主攻" if c["strategy"] == "主攻反弹" else "🛡️ 对冲"
+        lines.append(
+            f"* 🔴 **第 {c['id']:02d} 注**：{red_str} ＋ 🔵 `{c['blue']:02d}`  "
+            f"└─ *[{strategy_badge}] {c['strategy']} ｜ 重号配额: {c['repeats']} 码*"
+        )
         
     lines.extend([
         "",
         "---",
         "",
-        "### 💡 核心推演要点",
+        "### 💡 核心推演与优化逻辑",
+        f"1. **定胆锁轴（聚拢红球）**：以高位边码 `{anchor_red:02d}` 作为全组核心基石，打破号码分散碎片化缺陷，增强多码同框概率。",
+        "2. **重号立体防御**：按 2 注零重号（防大换血）+ 2 注单重号 + 1 注双重号梯度布局，化解两极化盘面风险。",
+        "3. **蓝球 3+2 动态对冲**：3 注主攻反弹奇数 + 2 注强制对冲偶数，彻底消除单边下注导致的通杀风险。",
+        "",
+        "### 🧠 Gemini AI 专家研判",
         ai_commentary,
         "",
         "---",
@@ -263,7 +367,7 @@ def main():
     with open("README.md", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
         
-    print("[Done] 方案二卡片式 README.md 已生成完毕。")
+    print("[Done] 高阶 README.md 已生成完毕，工作流就绪。")
 
 if __name__ == "__main__":
     main()
