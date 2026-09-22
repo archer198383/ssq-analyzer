@@ -55,7 +55,7 @@ class SSQDataManager:
                                 INSERT OR IGNORE INTO lottery_records 
                                 (issue, date, r1, r2, r3, r4, r5, r6, blue, sales, pool)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (issue, date, reds[0], reds, reds, reds, reds, reds[5], 
+                            """, (issue, date, reds[0], reds, reds, reds, reds, reds, 
                                   blue, item.get("sales", "0"), item.get("poolmoney", "0")))
                     conn.commit()
                 print("[OK] 官方最新开奖数据已同步入库。")
@@ -116,7 +116,8 @@ class QuantitativeEngine:
     def is_arithmetic_progression(reds: List[int]) -> bool:
         """检测并剔除等差数列等大众规则图形 (EV优化)"""
         diffs = np.diff(sorted(reds))
-        return len(set(diffs)) <= 2 and diffs[0] in
+        allowed_diffs = {2, 3, 4, 5}
+        return len(set(diffs)) <= 2 and int(diffs[0]) in allowed_diffs
 
     @classmethod
     def filter_red_combination(cls, reds: List[int]) -> bool:
@@ -162,10 +163,13 @@ class QuantitativeEngine:
         recent_blues = df["blue"].tail(10).tolist() if not df.empty else []
         last_blue = recent_blues[-1] if recent_blues else 6
         
-        # 主攻号池 (3注): 优先考虑黄金中枢带的质奇数与未过热路数
-        primary_pool = if x != last_blue]
+        # 主攻号池 (3注): 黄金中枢带的质奇数与未过热路数
+        primary_candidates =
+        primary_pool = [x for x in primary_candidates if x != last_blue]
+        
         # 对冲号池 (2注): 包含防守偶数及同路邻号，防止单边通杀
-        hedge_pool = if x != last_blue]
+        hedge_candidates =
+        hedge_pool = [x for x in hedge_candidates if x != last_blue]
         
         main_picks = random.sample(primary_pool, 3)
         hedge_picks = random.sample(hedge_pool, 2)
@@ -316,7 +320,7 @@ def main():
     # 调用 Gemini AI 生成专业研判
     ai_commentary = generate_gemini_analysis(df, candidates, anchor_red)
     
-    # 组装极简卡片式看板 (方案二：绝对不超宽，零横向拉动)
+    # 组装极简卡片式看板 (方案二：绝对不超宽，无横向拉动)
     current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
     next_issue = int(latest['issue']) + 1 if str(latest['issue']).isdigit() else "下期"
     
