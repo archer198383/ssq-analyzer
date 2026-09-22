@@ -55,8 +55,7 @@ class SSQDataManager:
                                 INSERT OR IGNORE INTO lottery_records 
                                 (issue, date, r1, r2, r3, r4, r5, r6, blue, sales, pool)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (issue, date, reds[0], reds, reds, reds, reds, reds, 
-                                  blue, item.get("sales", "0"), item.get("poolmoney", "0")))
+                            """, (issue, date, *reds, blue, item.get("sales", "0"), item.get("poolmoney", "0")))
                     conn.commit()
                 print("[OK] 官方最新开奖数据已同步入库。")
             else:
@@ -71,7 +70,7 @@ class SSQDataManager:
         return df
 
 # ----------------------------------------------------------------------
-# 2. 量化特征、定胆锁轴与 3+2 蓝球对冲引擎
+# 2. 量化特征工程、定胆锁轴与 3+2 蓝球对冲引擎
 # ----------------------------------------------------------------------
 class QuantitativeEngine:
     PRIME_NUMBERS = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31}
@@ -116,12 +115,13 @@ class QuantitativeEngine:
     def is_arithmetic_progression(reds: List[int]) -> bool:
         """检测并剔除等差数列等大众规则图形 (EV优化)"""
         diffs = np.diff(sorted(reds))
+        first_diff = int(list(diffs).pop(0))
         allowed_diffs = {2, 3, 4, 5}
-        return len(set(diffs)) <= 2 and int(diffs[0]) in allowed_diffs
+        return len(set(diffs)) <= 2 and first_diff in allowed_diffs
 
     @classmethod
     def filter_red_combination(cls, reds: List[int]) -> bool:
-        """科学形态与博弈去热门化过滤"""
+        """科学形态与博弈去热门化多重过滤"""
         feats = cls.extract_features(reds, 1)
         
         # 1. 和值区间约束 (85 - 130)
@@ -133,7 +133,7 @@ class QuantitativeEngine:
             return False
             
         # 3. 奇偶形态（排除全奇全偶及 1:5 极端失衡）
-        if feats["odd_even"] in ["0:6", "6:0", "1:5"]:
+        if feats["odd_even"] in ("0:6", "6:0", "1:5"):
             return False
             
         # 4. AC复杂度约束 (>= 6)
@@ -163,12 +163,12 @@ class QuantitativeEngine:
         recent_blues = df["blue"].tail(10).tolist() if not df.empty else []
         last_blue = recent_blues[-1] if recent_blues else 6
         
-        # 主攻号池 (3注): 黄金中枢带的质奇数与未过热路数
-        primary_candidates =
+        # 主攻号池 (3注): 黄金中枢带活跃奇数与高遗漏路数 (使用元组避免解析干扰)
+        primary_candidates = (3, 5, 7, 9, 11, 13)
         primary_pool = [x for x in primary_candidates if x != last_blue]
         
         # 对冲号池 (2注): 包含防守偶数及同路邻号，防止单边通杀
-        hedge_candidates =
+        hedge_candidates = (4, 6, 8, 10, 12, 14)
         hedge_pool = [x for x in hedge_candidates if x != last_blue]
         
         main_picks = random.sample(primary_pool, 3)
@@ -184,24 +184,26 @@ class QuantitativeEngine:
         3. 蓝球 3+2 动态对冲
         """
         latest = df.iloc[-1]
-        last_reds = set([int(latest[f"r{i}"]) for i in range(1, 7)])
+        last_reds = set(int(latest[f"r{i}"]) for i in range(1, 7))
         last_reds_list = list(last_reds)
         
-        # 1. 动态确定核心红球锚点 (高位边码 32/33 在博弈防平分中具有最高权重)
+        # 1. 动态确定核心红球锚点 (高位边码 32/33 具备最优博弈防平分价值)
         anchor_red = 32 if 33 in last_reds else 33
         
-        # 2. 蓝球 3+2 对冲规划
+        # 2. 蓝球 3+2 对冲规划（解包赋值，避免下标引用干扰）
         main_blues, hedge_blues = cls.analyze_blue_hedging(df)
-        blue_plan = [
-            (main_blues[0], "主攻反弹"),
-            (hedge_blues[0], "动态对冲"),
-            (main_blues, "主攻反弹"),
-            (hedge_blues, "动态对冲"),
-            (main_blues, "主攻反弹")
-        ]
+        mb_a, mb_b, mb_c = main_blues
+        hb_a, hb_b = hedge_blues
+        blue_plan = (
+            (mb_a, "主攻反弹"),
+            (hb_a, "动态对冲"),
+            (mb_b, "主攻反弹"),
+            (hb_b, "动态对冲"),
+            (mb_c, "主攻反弹")
+        )
         
         # 3. 重号梯队分布（兼顾大换血与重号聚类）
-        repeat_targets =
+        repeat_targets = (0, 1, 0, 1, 2)
         all_pool = set(range(1, 34))
         fresh_pool = list(all_pool - last_reds)
         
@@ -264,7 +266,8 @@ def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Dict], anchor: i
 
     try:
         client = genai.Client(api_key=api_key)
-        recent_df = df.tail(5)[["issue", "date", "r1", "r2", "r3", "r4", "r5", "r6", "blue"]]
+        cols = ("issue", "date", "r1", "r2", "r3", "r4", "r5", "r6", "blue")
+        recent_df = df.tail(5).loc[:, cols]
         recent_records = recent_df.to_dict(orient="records")
         
         summary_prompt = f"""
@@ -320,7 +323,7 @@ def main():
     # 调用 Gemini AI 生成专业研判
     ai_commentary = generate_gemini_analysis(df, candidates, anchor_red)
     
-    # 组装极简卡片式看板 (方案二：绝对不超宽，无横向拉动)
+    # 组装极简卡片式看板 (方案二：绝对不超宽，零横向滑动)
     current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
     next_issue = int(latest['issue']) + 1 if str(latest['issue']).isdigit() else "下期"
     
