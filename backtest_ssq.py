@@ -115,6 +115,11 @@ def load_or_fetch_history_data(total_target_issues: int = 1000) -> pd.DataFrame:
         print(f"[-] 接口网络连接受限: {e}")
 
     print(f"[i] 启用本地独立离线开奖池生成 {total_target_issues} 期样本进行回测检验...")
+    print("=" * 72)
+    print("⚠️⚠️⚠️ 警告：以下全部为程序随机生成的假数据，不是真实开奖记录！")
+    print("⚠️⚠️⚠️ 回测结论仅用于检验引擎代码流程是否跑通，不能作为任何真实依据。")
+    print("⚠️⚠️⚠️ 要跑真实回测请用 run_real_backtest.py（读 ssq_history.db 真实数据）。")
+    print("=" * 72)
     np.random.seed(2026)
     records = []
     for i in range(total_target_issues):
