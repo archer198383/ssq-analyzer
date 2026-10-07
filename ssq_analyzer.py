@@ -123,6 +123,45 @@ class QuantitativeEngine:
         return len(set(diffs)) <= 2 and first_diff in allowed_diffs
 
     @classmethod
+    def collision_heat_score(cls, reds: List[int], blue: int) -> int:
+        """大众撞号热度评分（0~100，越低越好）。
+
+        原理：每注中奖概率完全相同，但中奖后若与大量彩民撞号，奖金会被摊薄。
+        人类选号有可预测的偏好（生日号、幸运数字、整齐图形），避开这些可降低分奖概率。
+        注意：本评分基于行为研究中的常见偏好代理指标，不改变任何中奖概率；
+        具体热号无官方销售数据支撑，分数为启发式估计，仅供参考。
+        """
+        s = sorted(reds)
+        score = 0
+        # 1. 生日号偏好：6 红全 <=31 是最典型的撞号组合
+        if all(x <= 31 for x in s):
+            score += 30
+        elif sum(1 for x in s if x <= 12) >= 4:
+            score += 18  # 月份号扎堆
+        # 2. 连号
+        consec = sum(1 for i in range(5) if s[i + 1] - s[i] == 1)
+        score += consec * 8
+        # 3. 等差/对称图形（filter 已拦截大部分，此处计残余风险）
+        if cls.is_arithmetic_progression(s):
+            score += 25
+        # 4. 文化幸运数字扎堆（6/8/9/18/28 等华人偏好数字；启发式）
+        score += sum(1 for x in s if x in (6, 8, 9, 18, 28)) * 3
+        # 5. 蓝球中小号相对更受青睐（启发式）
+        if blue in (6, 8, 9, 10):
+            score += 8
+        # 6. 32/33 大号区人类相对少选，微降热度
+        score -= sum(1 for x in s if x >= 32) * 4
+        return max(0, min(100, int(score)))
+
+    @staticmethod
+    def heat_label(heat: int) -> str:
+        if heat <= 20:
+            return "低"
+        if heat <= 45:
+            return "中"
+        return "高"
+
+    @classmethod
     def filter_red_combination(cls, reds: List[int]) -> bool:
         feats = cls.extract_features(reds, 1)
         if not (85 <= feats["sum"] <= 130):
@@ -183,8 +222,9 @@ class QuantitativeEngine:
         for i in range(5):
             r_count = repeat_targets[i]
             blue_val, strategy_tag = blue_plan[i]
-            
-            found = False
+
+            # 在有效组合中保留撞号热度最低的一组（不改变中奖概率，只降低分奖风险）
+            best_reds, best_heat = None, 101
             for _ in range(3000):
                 chosen_reds = {anchor_red}
                 if r_count > 0:
@@ -192,28 +232,33 @@ class QuantitativeEngine:
                     repeat_pool = [x for x in last_reds_list if x != anchor_red]
                     chosen_repeats = set(random.sample(repeat_pool, min(r_count, len(repeat_pool))))
                     chosen_reds.update(chosen_repeats)
-                    
+
                 needed = 6 - len(chosen_reds)
                 avail_fresh = [x for x in fresh_pool if x not in chosen_reds]
                 if len(avail_fresh) < needed:
                     continue
                 chosen_reds.update(random.sample(avail_fresh, needed))
-                
+
                 sorted_reds = sorted(list(chosen_reds))
                 if len(sorted_reds) == 6 and cls.filter_red_combination(sorted_reds):
-                    feats = cls.extract_features(sorted_reds, blue_val)
-                    results.append({
-                        "id": i + 1,
-                        "reds": sorted_reds,
-                        "blue": blue_val,
-                        "strategy": strategy_tag,
-                        "repeats": r_count,
-                        "feats": feats
-                    })
-                    found = True
-                    break
-                    
-            if not found:
+                    heat = cls.collision_heat_score(sorted_reds, blue_val)
+                    if heat < best_heat:
+                        best_heat, best_reds = heat, sorted_reds
+                        if best_heat == 0:
+                            break
+
+            if best_reds is not None:
+                feats = cls.extract_features(best_reds, blue_val)
+                results.append({
+                    "id": i + 1,
+                    "reds": best_reds,
+                    "blue": blue_val,
+                    "strategy": strategy_tag,
+                    "repeats": r_count,
+                    "heat": best_heat,
+                    "feats": feats
+                })
+            else:
                 sample_reds = sorted(random.sample(range(1, 34), 6))
                 results.append({
                     "id": i + 1,
@@ -221,9 +266,10 @@ class QuantitativeEngine:
                     "blue": blue_val,
                     "strategy": strategy_tag,
                     "repeats": r_count,
+                    "heat": cls.collision_heat_score(sample_reds, blue_val),
                     "feats": cls.extract_features(sample_reds, blue_val)
                 })
-                
+
         return anchor_red, results
 
 # ----------------------------------------------------------------------
@@ -426,6 +472,7 @@ def load_recommendations(conn, target_issue):
             "blue": int(blue),
             "strategy": strategy or "存档",
             "repeats": repeats if repeats is not None else "-",
+            "heat": QuantitativeEngine.collision_heat_score(reds, int(blue)),
             "feats": QuantitativeEngine.extract_features(reds, int(blue)),
             "from_archive": True,
         })
@@ -588,9 +635,11 @@ def main():
             strategy_badge = "📦 存档"
         else:
             strategy_badge = "🎯 主攻" if c["strategy"] == "主攻反弹" else "🛡️ 对冲"
+        heat = c.get("heat")
+        heat_txt = f" ｜ 撞号风险: {QuantitativeEngine.heat_label(heat)}({heat})" if isinstance(heat, int) else ""
         lines.append(
             f"* 🔴 **第 {c['id']:02d} 注**：{red_str} ＋ 🔵 `{c['blue']:02d}`  "
-            f"└─ *[{strategy_badge}] {c['strategy']} ｜ 重号配额: {c.get('repeats', '-')} 码*"
+            f"└─ *[{strategy_badge}] {c['strategy']} ｜ 重号配额: {c.get('repeats', '-')} 码{heat_txt}*"
         )
         
     lines.extend([
@@ -607,7 +656,8 @@ def main():
         "",
         "---",
         "",
-        "<sub>*免责声明：彩票为独立随机事件，精算模型旨在控制分奖稀释与资金风险边界，请理性参与。*</sub>"
+        "<sub>*免责声明：彩票为独立随机事件，精算模型旨在控制分奖稀释与资金风险边界，请理性参与。"
+        "撞号风险评分仅估计中奖后与他人分奖的可能性，不改变任何中奖概率。*</sub>"
     ])
     
     with open("README.md", "w", encoding="utf-8") as f:
