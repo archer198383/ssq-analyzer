@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+# 本地开奖库+推荐存档（含个人投注记录），不进公开仓库；home 目录本身持久化
+ssq_history.db
