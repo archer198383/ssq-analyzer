@@ -2,11 +2,15 @@ import os
 import sqlite3
 import random
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import List, Dict, Tuple, Optional
 import numpy as np
 import pandas as pd
 from google import genai
+from backtest_ssq import calculate_prize as prize_tier  # 奖级计算统一用 backtest_ssq 的实现，避免两套重复逻辑打架
+
+BEIJING = ZoneInfo("Asia/Shanghai")
 
 # ----------------------------------------------------------------------
 # 1. 数据库管理与官方数据同步模块 (SQLite + CWL API + Pandas)
@@ -32,7 +36,8 @@ class SSQDataManager:
             """)
             conn.commit()
 
-    def sync_official_data(self, fetch_count: int = 100):
+    def sync_official_data(self, fetch_count: int = 100) -> bool:
+        """同步官方开奖数据。返回 True=成功拉到数据，False=失败（调用方需标注数据可能滞后）。"""
         url = f"https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name=ssq&issueCount={fetch_count}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -57,10 +62,13 @@ class SSQDataManager:
                             """, (issue, date, *reds, blue, item.get("sales", "0"), item.get("poolmoney", "0")))
                     conn.commit()
                 print("[OK] 官方最新开奖数据已同步入库。")
+                return True
             else:
                 print(f"[Warn] 官方接口返回异常代码: {resp.status_code}")
+                return False
         except Exception as e:
             print(f"[Warn] 官方接口同步跳过: {e}")
+            return False
 
     def load_dataframe(self) -> pd.DataFrame:
         with sqlite3.connect(self.db_path) as conn:
@@ -180,7 +188,9 @@ class QuantitativeEngine:
             for _ in range(3000):
                 chosen_reds = {anchor_red}
                 if r_count > 0:
-                    chosen_repeats = set(random.sample(last_reds_list, min(r_count, len(last_reds_list))))
+                    # 胆码本身若在上期红球中，抽重号时先剔除，避免 set 去重导致实际重号数少于配额
+                    repeat_pool = [x for x in last_reds_list if x != anchor_red]
+                    chosen_repeats = set(random.sample(repeat_pool, min(r_count, len(repeat_pool))))
                     chosen_reds.update(chosen_repeats)
                     
                 needed = 6 - len(chosen_reds)
@@ -223,22 +233,34 @@ class ActuarialMetrics:
     @staticmethod
     def evaluate_market_metrics(pool_str: str, candidates: List[Dict]) -> Dict:
         """测算奖池溢价系数、5注组合红球覆盖率及博弈碰撞指数"""
-        pool_num = 9.73
+        pool_num = None
         try:
             cleaned = str(pool_str).replace("亿", "").replace("元", "").replace(",", "").strip()
             val = float(cleaned)
-            pool_num = val if val < 1000 else val / 1e8
+            if val == val:  # 排除 nan（pandas 空值会变成 nan，float('nan') 不抛异常）
+                pool_num = val if val < 1000 else val / 1e8
         except Exception:
-            pool_num = 9.73
+            pool_num = None
 
-        # 奖池溢价系数 (基准线 1.0 亿元)
-        premium_ratio = round(pool_num / 1.0, 2)
-        if premium_ratio >= 8.0:
-            premium_grade = "极高溢价 (S级·顶格支持单注1000万)"
-        elif premium_ratio >= 3.0:
-            premium_grade = "充裕溢价 (A级·支持多注封顶)"
+        if pool_num is None:
+            # 奖池数据缺失时不编造数字、不套用高溢价话术
+            premium_ratio_txt = "未知"
+            premium_grade = "奖池数据缺失"
+            pool_display = "未知"
+            actuarial_advice = "奖池数据缺失，无法评估溢价；坚持轻仓固定注数（严禁加仓倍投），理性参与。"
         else:
-            premium_grade = "常态水位"
+            premium_ratio = round(pool_num / 1.0, 2)
+            premium_ratio_txt = f"{premium_ratio}x"
+            pool_display = round(pool_num, 2)
+            if premium_ratio >= 8.0:
+                premium_grade = "极高溢价 (S级·顶格支持单注1000万)"
+                actuarial_advice = "当前奖池处于极端高位溢价期，高等奖边际价值显著放大，坚持轻仓固定注数（严禁加仓倍投），锁定最高EV组合。"
+            elif premium_ratio >= 3.0:
+                premium_grade = "充裕溢价 (A级·支持多注封顶)"
+                actuarial_advice = "奖池溢价充裕，高等奖边际价值上升，坚持轻仓固定注数（严禁加仓倍投）。"
+            else:
+                premium_grade = "常态水位"
+                actuarial_advice = "奖池处于常态水位，坚持轻仓固定注数（严禁加仓倍投），理性参与。"
 
         # 5注组合去重红球覆盖率
         unique_reds = set()
@@ -248,13 +270,13 @@ class ActuarialMetrics:
         coverage_pct = round((coverage_count / 33.0) * 100, 1)
 
         return {
-            "pool_num": round(pool_num, 2),
-            "premium_ratio": f"{premium_ratio}x",
+            "pool_num": pool_display,
+            "premium_ratio": premium_ratio_txt,
             "premium_grade": premium_grade,
             "coverage_count": coverage_count,
             "coverage_pct": f"{coverage_pct}%",
             "collision_index": "极低 (已过滤大众生日密集区与等差图形，独占头奖期望最优)",
-            "actuarial_advice": "当前奖池处于极端高位溢价期，高等奖边际价值显著放大，坚持轻仓固定注数（严禁加仓倍投），锁定最高EV组合。"
+            "actuarial_advice": actuarial_advice,
         }
 
 # ----------------------------------------------------------------------
@@ -301,40 +323,241 @@ def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Dict], anchor: i
 # ----------------------------------------------------------------------
 # 5. 主流程：全屏自适应卡片看板 (方案二标准 + 精算微观盘面)
 # ----------------------------------------------------------------------
+
+# ----------------------------------------------------------------------
+# 推荐存档与上期回顾模块：每次运行存档本期推荐，下次有新开奖时自动核对
+# ----------------------------------------------------------------------
+def calc_next_draw_date(date_str):
+    """由本期开奖日期推算下期开奖日期（双色球固定每周二、四、日开奖）。"""
+    d = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+    draw_weekdays = {1, 3, 6}  # 周二、周四、周日
+    nxt = d + timedelta(days=1)
+    while nxt.weekday() not in draw_weekdays:
+        nxt += timedelta(days=1)
+    return nxt.strftime("%Y-%m-%d")
+
+
+def calc_next_issue(issue, latest_date=None, next_date=None):
+    """由当前期号推算下期期号。跨年时按下期开奖日期直接取新年001（旧的>160阈值是错的，一年只有152~154期）。"""
+    s = str(issue)
+    if not s.isdigit() or len(s) < 5:
+        return "下期"
+    if latest_date and next_date:
+        if str(next_date)[:4] > str(latest_date)[:4]:
+            return "%s001" % str(next_date)[:4]
+    year, seq = int(s[:-3]), int(s[-3:])
+    return "%d%03d" % (year, seq + 1)
+
+
+def ensure_recommendations_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS recommendations (
+            target_issue TEXT,
+            note_id INTEGER,
+            reds TEXT,
+            blue INTEGER,
+            strategy TEXT,
+            repeats INTEGER,
+            target_date TEXT,
+            created_at TEXT,
+            verified_at TEXT,
+            PRIMARY KEY (target_issue, note_id)
+        )
+    """)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(recommendations)").fetchall()]
+    for col in ("verified_at", "strategy", "repeats", "target_date"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE recommendations ADD COLUMN {col} {'INTEGER' if col == 'repeats' else 'TEXT'}")
+    # 回填老存档缺失的 target_date：按"上一期开奖日期→下期开奖日"推算，保证回顾能按日期匹配
+    for (tgt,) in conn.execute(
+            "SELECT DISTINCT target_issue FROM recommendations"
+            " WHERE target_date IS NULL OR target_date = ''").fetchall():
+        prev = conn.execute(
+            "SELECT date FROM lottery_records WHERE issue < ? ORDER BY issue DESC LIMIT 1",
+            (str(tgt),)).fetchone()
+        if prev and prev[0]:
+            nd = calc_next_draw_date(prev[0])
+            conn.execute("UPDATE recommendations SET target_date = ? WHERE target_issue = ?",
+                         (nd, str(tgt)))
+            print(f"[i] 回填第 {tgt} 期 target_date = {nd}")
+    conn.commit()
+
+
+def save_recommendations(conn, target_issue, target_date, candidates):
+    """幂等保存：同一期已有存档则直接跳过，绝不删除/覆盖——保护开奖前生成的真实存档。
+
+    背景：定时任务可能在官方接口滞后时先跑一次（此时最新期号还是上期），
+    若此时无条件重建，会把真正的下期推荐存档洗掉，之后回顾核对的就是假数据。
+    """
+    tgt = str(target_issue)
+    existing = conn.execute(
+        "SELECT COUNT(*) FROM recommendations WHERE target_issue = ?", (tgt,)).fetchone()[0]
+    if existing:
+        print(f"[i] 第 {tgt} 期已有 {existing} 条推荐存档，跳过保存（保护原始存档不被覆盖）。")
+        return False
+    now = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+    with conn:
+        for c in candidates:
+            reds_str = ",".join(str(x) for x in sorted(c["reds"]))
+            conn.execute(
+                "INSERT INTO recommendations (target_issue, note_id, reds, blue, strategy, repeats,"
+                " target_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (tgt, int(c["id"]), reds_str, int(c["blue"]), str(c.get("strategy", "")),
+                 int(c.get("repeats", 0)) if str(c.get("repeats", 0)).isdigit() else 0,
+                 str(target_date), now))
+    print(f"[i] 第 {tgt} 期（{target_date}）{len(candidates)} 注推荐已存档。")
+    return True
+
+
+def load_recommendations(conn, target_issue):
+    """读取某期的存档推荐（用于直接展示存档，不重新生成）。"""
+    rows = conn.execute(
+        "SELECT note_id, reds, blue, strategy, repeats FROM recommendations"
+        " WHERE target_issue = ? ORDER BY note_id",
+        (str(target_issue),)).fetchall()
+    out = []
+    for note_id, reds_str, blue, strategy, repeats in rows:
+        reds = sorted(int(x) for x in str(reds_str).split(",") if x.strip().isdigit())
+        if len(reds) != 6:
+            continue
+        out.append({
+            "id": int(note_id),
+            "reds": reds,
+            "blue": int(blue),
+            "strategy": strategy or "存档",
+            "repeats": repeats if repeats is not None else "-",
+            "feats": QuantitativeEngine.extract_features(reds, int(blue)),
+            "from_archive": True,
+        })
+    return out
+
+
+def build_review_lines(conn, latest_issue, df):
+    """核对所有尚未验证、且开奖数据已到位的存档推荐（最多回溯 5 期），核对后标记。
+
+    匹配优先用 target_date 对开奖日期（跨年/期号推算错误时依然可靠），
+    target_date 缺失时回退到期号匹配。
+    """
+    latest_str = str(latest_issue)
+    latest_rows = df[df["issue"].astype(str) == latest_str]
+    latest_date = str(latest_rows.iloc[0]["date"])[:10] if not latest_rows.empty else ""
+    cur = conn.execute(
+        "SELECT DISTINCT target_issue, target_date FROM recommendations"
+        " WHERE (verified_at IS NULL OR verified_at = '')"
+        " AND (target_issue <= ?"
+        "      OR (target_date IS NOT NULL AND target_date != '' AND target_date <= ?))"
+        " ORDER BY target_issue DESC LIMIT 5",
+        (latest_str, latest_date))
+    targets = [(r[0], r[1]) for r in cur.fetchall()]
+    lines = []
+    now = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M:%S")
+    for tgt, tgt_date in targets:
+        draw = df[df["issue"].astype(str) == str(tgt)]
+        if draw.empty and tgt_date:
+            draw = df[df["date"].astype(str).str[:10] == str(tgt_date)[:10]]
+        if draw.empty:
+            continue
+        row = draw.iloc[0]
+        act_reds = [int(row["r%d" % i]) for i in range(1, 7)]
+        act_blue = int(row["blue"])
+        recs = conn.execute(
+            "SELECT note_id, reds, blue FROM recommendations WHERE target_issue = ? ORDER BY note_id",
+            (str(tgt),)).fetchall()
+        lines.append("### \U0001F50D 上期推荐回顾（第 `%s` 期）" % tgt)
+        lines.append(
+            "实际开奖：红球 %s ｜ 蓝球 `%02d`"
+            % (" ".join("`%02d`" % x for x in act_reds), act_blue))
+        act = set(act_reds)
+        total = 0
+        for note_id, reds_str, blue in recs:
+            rec_reds = [int(x) for x in reds_str.split(",")]
+            rh = len(set(rec_reds) & act)
+            bh = int(blue) == act_blue
+            tier, money = prize_tier(rh, bh)
+            total += money
+            mark = "\u2192 **%d\u7b49\u5956 %d\u5143**" % (tier, money) if tier else "\u2192 \u672a\u4e2d\u5956"
+            rstr = " ".join("`%02d`" % x for x in rec_reds)
+            bmark = "\u84dd\u4e2d" if bh else "\u84dd\u9519"
+            lines.append(
+                "- 第 `%02d` 注：%s ＋ `%02d`（红中%d、%s）%s"
+                % (note_id, rstr, int(blue), rh, bmark, mark))
+        lines.append(
+            "- **\u6c47\u603b**：%d \u6ce8\u5171\u6295\u5165 `%d` \u5143，\u4e2d\u5956 `%d` \u5143"
+            % (len(recs), len(recs) * 2, total))
+        lines.append("")
+        conn.execute("UPDATE recommendations SET verified_at = ? WHERE target_issue = ?",
+                     (now, str(tgt)))
+    conn.commit()
+    if not lines:
+        lines = ["### \U0001F50D 上期推荐回顾",
+                 "- 暂无可核对的上期推荐存档；本期推荐已存档，待开奖数据到位后自动回顾。",
+                 ""]
+    lines.extend(["---", ""])
+    return lines
+
+
 def main():
     print("=== 开始运行双色球精算量化分析工作流 ===")
     data_mgr = SSQDataManager()
-    data_mgr.sync_official_data(fetch_count=100)
+    sync_ok = data_mgr.sync_official_data(fetch_count=100)
     df = data_mgr.load_dataframe()
-    
+
     if df.empty:
         print("[Error] 未获取到历史数据，终止流程。")
         return
-        
+
+    rec_conn = sqlite3.connect(data_mgr.db_path)
+    ensure_recommendations_table(rec_conn)
+
     latest = df.iloc[-1]
+    latest_issue = str(latest['issue'])
+    latest_date = str(latest['date'])[:10]
     latest_reds = [int(latest[f"r{i}"]) for i in range(1, 7)]
     latest_blue = int(latest["blue"])
     latest_feats = QuantitativeEngine.extract_features(latest_reds, latest_blue)
-    
-    print(f"最新一期: {latest['issue']} ({latest['date']}) | 红球: {latest_reds} | 蓝球: {latest_blue}")
-    
-    # 综合推算：定胆锁轴 + 重号立体梯队 + 蓝球 3+2 对冲
-    anchor_red, candidates = QuantitativeEngine.generate_enhanced_portfolio(df)
-    
+    review_lines = build_review_lines(rec_conn, latest_issue, df)
+
+    print(f"最新一期: {latest_issue} ({latest_date}) | 红球: {latest_reds} | 蓝球: {latest_blue}")
+
+    # 下期推荐：存档优先——已有存档直接展示，不重新生成、不覆盖、不调 Gemini
+    next_date = calc_next_draw_date(latest_date)
+    next_issue = calc_next_issue(latest_issue, latest_date, next_date)
+    archived = load_recommendations(rec_conn, next_issue)
+    if archived:
+        print(f"[i] 第 {next_issue} 期已有 {len(archived)} 注存档，直接展示存档推荐。")
+        candidates = archived
+        common = set(archived[0]["reds"])
+        for c in archived[1:]:
+            common &= set(c["reds"])
+        anchor_red = sorted(common)[0] if len(common) == 1 else None
+        from_archive = True
+    else:
+        # 综合推算：定胆锁轴 + 重号立体梯队 + 蓝球 3+2 对冲
+        anchor_red, candidates = QuantitativeEngine.generate_enhanced_portfolio(df)
+        save_recommendations(rec_conn, next_issue, next_date, candidates)
+        from_archive = False
+    rec_conn.close()
+
     # 计算精算师微观盘面指标
     actuarial_info = ActuarialMetrics.evaluate_market_metrics(latest['pool'], candidates)
-    
-    # 调用 Gemini AI 生成精算研判
-    ai_commentary = generate_gemini_analysis(df, candidates, anchor_red, actuarial_info)
-    
+
+    # 调用 Gemini AI 生成精算研判（仅新生成时调用，展示存档时跳过）
+    if from_archive:
+        ai_commentary = "> 本期展示已存档推荐，未重新调用 AI 研判。"
+    else:
+        ai_commentary = generate_gemini_analysis(df, candidates, anchor_red, actuarial_info)
+
     # 组装极简卡片式看板 (方案二：绝对不超宽，无横向滑动)
-    current_time_str = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
-    next_issue = int(latest['issue']) + 1 if str(latest['issue']).isdigit() else "下期"
-    
+    current_time_str = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
+    sync_mark = "官方接口同步成功" if sync_ok else "⚠️官方接口同步失败，数据可能滞后（已用本地库）"
+    archive_mark = "（存档展示）" if from_archive else ""
+    anchor_txt = f"`{anchor_red:02d}`" if anchor_red else "—"
+
     lines = [
         "# 🔴🔵 双色球量化分析看板（精算量化与对冲版）",
         "",
-        f"> 🕒 **更新时间**：`{current_time_str}` ｜ **期号**：第 `{next_issue}` 期推演",
+        f"> 🕒 **更新时间**：`{current_time_str}`（北京时间） ｜ **期号**：第 `{next_issue}` 期推演{archive_mark}",
+        f"> 📡 **数据状态**：{sync_mark} ｜ 数据截止第 `{latest_issue}` 期（{latest_date}）",
         "",
         "---",
         "",
@@ -346,24 +569,28 @@ def main():
         "",
         "---",
         "",
-        f"### 📋 上期开奖总结（第 `{latest['issue']}` 期）",
+        f"### 📋 上期开奖总结（第 `{latest_issue}` 期）",
         f"- **开奖号码**：红球 {' '.join(f'`{x:02d}`' for x in latest_reds)} ｜ 蓝球 `{latest_blue:02d}`",
         f"- **奖池滚存**：约 `{latest['pool']}` 元",
         f"- **形态特征**：三区比 `{latest_feats['zone_ratio']}` ｜ 奇偶比 `{latest_feats['odd_even']}` ｜ 连号组数 `{latest_feats['consecutive']}` ｜ 跨度 `{latest_feats['span']}` ｜ AC值 `{latest_feats['ac_value']}`",
         "",
         "---",
         "",
-        f"### 🎯 本期推荐组合（核心红胆：`{anchor_red:02d}` ｜ 蓝球 3+2 对冲）",
+        *review_lines,
+        f"### 🎯 本期推荐组合（核心红胆：{anchor_txt} ｜ 蓝球 3+2 对冲{archive_mark}）",
         ""
     ]
-    
+
     # 方案二：生成纯自适应卡片式列表
     for c in candidates:
         red_str = " ".join(f"`{x:02d}`" for x in c["reds"])
-        strategy_badge = "🎯 主攻" if c["strategy"] == "主攻反弹" else "🛡️ 对冲"
+        if c.get("from_archive"):
+            strategy_badge = "📦 存档"
+        else:
+            strategy_badge = "🎯 主攻" if c["strategy"] == "主攻反弹" else "🛡️ 对冲"
         lines.append(
             f"* 🔴 **第 {c['id']:02d} 注**：{red_str} ＋ 🔵 `{c['blue']:02d}`  "
-            f"└─ *[{strategy_badge}] {c['strategy']} ｜ 重号配额: {c['repeats']} 码*"
+            f"└─ *[{strategy_badge}] {c['strategy']} ｜ 重号配额: {c.get('repeats', '-')} 码*"
         )
         
     lines.extend([
@@ -371,7 +598,7 @@ def main():
         "---",
         "",
         "### 💡 精算推演与优化逻辑",
-        f"1. **定胆锁轴（聚拢红球）**：以高位边码 `{anchor_red:02d}` 作为全组核心基石，打破号码分散碎片化缺陷，增强多码同框概率。",
+        f"1. **定胆锁轴（聚拢红球）**：以高位边码 {anchor_txt} 作为全组核心基石，打破号码分散碎片化缺陷，增强多码同框概率。",
         "2. **重号立体防御**：按 2 注零重号（防大换血）+ 2 注单重号 + 1 注双重号梯度布局，化解两极化盘面风险。",
         "3. **蓝球 3+2 动态对冲**：3 注主攻反弹奇数 + 2 注强制对冲偶数，彻底消除单边下注导致的通杀风险。",
         "",
