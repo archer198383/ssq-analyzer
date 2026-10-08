@@ -37,39 +37,112 @@ class SSQDataManager:
             """)
             conn.commit()
 
-    def sync_official_data(self, fetch_count: int = 100) -> bool:
-        """同步官方开奖数据。返回 True=成功拉到数据，False=失败（调用方需标注数据可能滞后）。"""
+    def sync_official_data(self, fetch_count: int = 100, retries: int = 3) -> bool:
+        """同步官方开奖数据（带重试退避）。返回 True=成功拉到数据，False=失败。
+
+        说明：福彩官方接口（cwl.gov.cn）前置了网宿云安全检测，会按 IP 限流/拦截
+        机房访问。重试可应对"请稍后重试"类临时拦截；若持续被封，需走浏览器
+        或手动录入（见 import_manual_draw）。诊断信息记在 self.last_sync。
+        """
+        import time
         url = f"https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?name=ssq&issueCount={fetch_count}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer": "https://www.cwl.gov.cn/"
+            "Referer": "https://www.cwl.gov.cn/",
+            "Accept": "application/json, text/plain, */*",
         }
-        try:
-            resp = requests.get(url, headers=headers, timeout=12)
-            if resp.status_code == 200:
-                data = resp.json().get("result", [])
-                with sqlite3.connect(self.db_path) as conn:
-                    cursor = conn.cursor()
-                    for item in data:
-                        issue = item.get("code")
-                        date = item.get("date", "")[:10]
-                        reds = [int(x) for x in item.get("red", "").split(",") if x.isdigit()]
-                        blue = int(item.get("blue", 0))
-                        if len(reds) == 6 and blue > 0:
-                            cursor.execute("""
-                                INSERT OR IGNORE INTO lottery_records 
-                                (issue, date, r1, r2, r3, r4, r5, r6, blue, sales, pool)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (issue, date, *reds, blue, item.get("sales", "0"), item.get("poolmoney", "0")))
-                    conn.commit()
-                print("[OK] 官方最新开奖数据已同步入库。")
-                return True
-            else:
-                print(f"[Warn] 官方接口返回异常代码: {resp.status_code}")
-                return False
-        except Exception as e:
-            print(f"[Warn] 官方接口同步跳过: {e}")
+        self.last_sync = {"source": "cwl.gov.cn", "ok": False, "http_status": None,
+                          "error": "", "issues_added": 0, "attempts": 0}
+        added = 0
+        for attempt in range(1, retries + 1):
+            self.last_sync["attempts"] = attempt
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+                self.last_sync["http_status"] = resp.status_code
+                if resp.status_code == 200:
+                    try:
+                        data = resp.json().get("result", [])
+                    except Exception:
+                        data = []
+                    if not data:
+                        self.last_sync["error"] = "200 但返回体无 result 数据"
+                        continue
+                    with sqlite3.connect(self.db_path) as conn:
+                        cursor = conn.cursor()
+                        for item in data:
+                            issue = item.get("code")
+                            date = str(item.get("date", ""))[:10]
+                            reds = [int(x) for x in str(item.get("red", "")).split(",") if x.isdigit()]
+                            try:
+                                blue = int(item.get("blue", 0))
+                            except Exception:
+                                blue = 0
+                            if issue and len(reds) == 6 and blue > 0:
+                                cursor.execute("""
+                                    INSERT OR IGNORE INTO lottery_records
+                                    (issue, date, r1, r2, r3, r4, r5, r6, blue, sales, pool)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """, (str(issue), date, *reds, blue,
+                                      str(item.get("sales", "0")), str(item.get("poolmoney", "0"))))
+                                added += cursor.rowcount
+                        conn.commit()
+                    self.last_sync.update(ok=True, issues_added=added, error="")
+                    print(f"[OK] 官方开奖数据已同步入库（新增 {added} 期，第 {attempt} 次尝试成功）。")
+                    return True
+                else:
+                    self.last_sync["error"] = f"HTTP {resp.status_code}"
+                    body_hint = resp.text[:60].replace("\n", " ")
+                    if "安全" in resp.text[:200] or "异常" in resp.text[:200]:
+                        self.last_sync["error"] += "（网宿云安全拦截）"
+                    print(f"[Warn] 官方接口返回异常代码: {resp.status_code}（第 {attempt}/{retries} 次）{body_hint}")
+            except Exception as e:
+                self.last_sync["error"] = f"{type(e).__name__}: {e}"
+                print(f"[Warn] 官方接口同步异常（第 {attempt}/{retries} 次）: {e}")
+            if attempt < retries:
+                time.sleep(5 * attempt)  # 退避：5s、10s……
+        print(f"[Warn] 官方接口 {retries} 次尝试均失败：{self.last_sync['error']}")
+        return False
+
+    def import_manual_draw(self, issue, date, reds, blue, sales="0", pool="0") -> bool:
+        """手动录入单期开奖（官方接口被封时的备用入口）。
+
+        参数校验严格：期号数字、日期格式、6 个 1~33 不重复红球、蓝球 1~16。
+        成功返回 True；数据已存在时幂等返回 True（不覆盖）。
+        """
+        import re
+        issue_s = str(issue).strip()
+        if not re.fullmatch(r"\d{7}", issue_s):
+            print(f"[Error] 期号格式错误：{issue_s}（应为 7 位数字，如 2026115）")
             return False
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(date).strip()):
+            print(f"[Error] 日期格式错误：{date}（应为 YYYY-MM-DD）")
+            return False
+        red_list = sorted(int(x) for x in reds) if isinstance(reds, (list, tuple)) else []
+        if len(red_list) != 6 or len(set(red_list)) != 6 or \
+                any(not 1 <= x <= 33 for x in red_list):
+            print(f"[Error] 红球无效：{reds}（需 6 个 1~33 不重复数字）")
+            return False
+        try:
+            blue_i = int(blue)
+        except Exception:
+            blue_i = 0
+        if not 1 <= blue_i <= 16:
+            print(f"[Error] 蓝球无效：{blue}（需 1~16）")
+            return False
+        with sqlite3.connect(self.db_path) as conn:
+            exists = conn.execute("SELECT 1 FROM lottery_records WHERE issue = ?",
+                                  (issue_s,)).fetchone()
+            if exists:
+                print(f"[i] 第 {issue_s} 期已在库中，跳过录入（不覆盖）。")
+                return True
+            conn.execute("""
+                INSERT INTO lottery_records
+                (issue, date, r1, r2, r3, r4, r5, r6, blue, sales, pool)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (issue_s, str(date).strip(), *red_list, blue_i, str(sales), str(pool)))
+            conn.commit()
+        print(f"[OK] 已手动录入第 {issue_s} 期：红球 {' '.join(f'{x:02d}' for x in red_list)} 蓝球 {blue_i:02d}")
+        return True
 
     def load_dataframe(self) -> pd.DataFrame:
         with sqlite3.connect(self.db_path) as conn:
@@ -799,7 +872,11 @@ def main():
 
     # 组装极简卡片式看板 (方案二：绝对不超宽，无横向滑动)
     current_time_str = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
-    sync_mark = "官方接口同步成功" if sync_ok else "⚠️官方接口同步失败，数据可能滞后（已用本地库）"
+    sync_info = getattr(data_mgr, "last_sync", {}) or {}
+    sync_detail = ""
+    if not sync_ok and sync_info.get("error"):
+        sync_detail = f"（{sync_info['error']}，{sync_info.get('attempts', 1)} 次尝试）"
+    sync_mark = "官方接口同步成功" if sync_ok else f"⚠️官方接口同步失败{sync_detail}，数据可能滞后（已用本地库）"
     archive_mark = "（存档展示）" if from_archive else ""
     anchor_txt = f"`{anchor_red:02d}`" if anchor_red else "—"
 
