@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from google import genai
 from backtest_ssq import calculate_prize as prize_tier  # 奖级计算统一用 backtest_ssq 的实现，避免两套重复逻辑打架
+from self_learning import SelfScoreboard  # 自我记分板（只读已验证推荐，无循环依赖）
 
 BEIJING = ZoneInfo("Asia/Shanghai")
 
@@ -779,6 +780,8 @@ def main():
         anchor_red, candidates = QuantitativeEngine.generate_enhanced_portfolio(df)
         save_recommendations(rec_conn, next_issue, next_date, candidates)
         from_archive = False
+    # 自我记分板：统计已验证推荐（含本轮刚验证的），与随机基线并排
+    scoreboard_rows = SelfScoreboard.compute(rec_conn, df)
     rec_conn.close()
 
     # 计算精算师微观盘面指标
@@ -827,6 +830,11 @@ def main():
         "### 📈 专家式走势分析",
         "",
         *expert_lines,
+        "---",
+        "",
+        "### 🧾 自我记分板（已验证推荐 vs 随机基线）",
+        "",
+        *SelfScoreboard.render_markdown(scoreboard_rows),
         "---",
         "",
         f"### 🎯 本期推荐组合（核心红胆：{anchor_txt} ｜ 蓝球 3+2 对冲{archive_mark}）",
