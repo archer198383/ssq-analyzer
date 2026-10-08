@@ -326,6 +326,202 @@ class ActuarialMetrics:
         }
 
 # ----------------------------------------------------------------------
+# 3.5 专家式走势分析模块 (Expert-Style Trend Analysis)
+# ----------------------------------------------------------------------
+class ExpertStyleAnalysis:
+    """模仿彩票专家的分析思路：三区走势、012路、奇偶/大小/质合比、热号遗漏、胆码杀号。
+
+    诚实声明：本模块输出的全部是历史开奖数据的**描述性统计**。
+    双色球每期独立随机，这些统计不改变任何号码未来的中奖概率，
+    仅用于走势查看与复盘，不得解读为预测依据。
+    """
+    ZONE_BOUNDS = ((1, 11), (12, 22), (23, 33))
+    PRIME_SET = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31}
+
+    @classmethod
+    def zone_of(cls, n: int) -> int:
+        for i, (lo, hi) in enumerate(cls.ZONE_BOUNDS, start=1):
+            if lo <= n <= hi:
+                return i
+        return 0
+
+    @classmethod
+    def _reds(cls, row) -> List[int]:
+        return [int(row[f"r{i}"]) for i in range(1, 7)]
+
+    @classmethod
+    def omission_map(cls, df: pd.DataFrame) -> Dict[int, int]:
+        """每个红球号码的当前遗漏期数（距离上次开出隔了多少期）。"""
+        n = len(df)
+        last_seen = {}
+        for idx, row in df.iterrows():
+            for x in cls._reds(row):
+                last_seen[x] = idx
+        return {x: (n - 1 - last_seen.get(x, -1)) for x in range(1, 34)}
+
+    @classmethod
+    def analyze(cls, df: pd.DataFrame, window: int = 10, hot_window: int = 30) -> Dict:
+        if df.empty:
+            return {}
+        recent = df.tail(window)
+        total_balls = len(recent) * 6
+
+        zone_counts = [0, 0, 0]
+        route012 = [0, 0, 0]
+        odd_c = even_c = big_c = small_c = prime_c = comp_c = 0
+        blue_odd = blue_even = blue_prime = blue_comp = blue_neither = 0
+        per_draw_zone = []
+        for _, row in recent.iterrows():
+            reds = cls._reds(row)
+            zc = [0, 0, 0]
+            for x in reds:
+                z = cls.zone_of(x)
+                zone_counts[z - 1] += 1
+                zc[z - 1] += 1
+                route012[x % 3] += 1
+                if x % 2:
+                    odd_c += 1
+                else:
+                    even_c += 1
+                if x >= 17:
+                    big_c += 1
+                else:
+                    small_c += 1
+                if x in cls.PRIME_SET:
+                    prime_c += 1
+                else:
+                    comp_c += 1
+            per_draw_zone.append(zc)
+            b = int(row["blue"])
+            if b % 2:
+                blue_odd += 1
+            else:
+                blue_even += 1
+            if b in cls.PRIME_SET:
+                blue_prime += 1
+            elif b == 1:
+                blue_neither += 1  # 1 既非质数也非合数
+            else:
+                blue_comp += 1
+
+        # 热号：近 hot_window 期出现频次 Top6；遗漏：全库遗漏最长 Top6
+        hot_pool = df.tail(hot_window)
+        freq: Dict[int, int] = {}
+        for _, row in hot_pool.iterrows():
+            for x in cls._reds(row):
+                freq[x] = freq.get(x, 0) + 1
+        hot_sorted = sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))
+        hot6 = [(x, c) for x, c in hot_sorted[:6]]
+
+        omit = cls.omission_map(df)
+        cold_sorted = sorted(omit.items(), key=lambda kv: (-kv[1], kv[0]))
+        cold6 = cold_sorted[:6]
+
+        # 胆码取热号前3，杀号取遗漏最长前3，二者互斥
+        danma = [x for x, _ in hot6[:3]]
+        shahao = [x for x, _ in cold6[:3] if x not in danma]
+        # 补齐杀号到3个（从遗漏榜顺延）
+        for x, _ in cold6[3:]:
+            if len(shahao) >= 3:
+                break
+            if x not in danma and x not in shahao:
+                shahao.append(x)
+
+        last_row = recent.iloc[-1]
+        last_zone = [0, 0, 0]
+        for x in cls._reds(last_row):
+            last_zone[cls.zone_of(x) - 1] += 1
+
+        def heat_word(actual: float, expected: float) -> str:
+            if expected <= 0:
+                return "均衡"
+            r = actual / expected
+            if r >= 1.15:
+                return "偏热"
+            if r <= 0.85:
+                return "偏冷"
+            return "均衡"
+
+        return {
+            "window": len(recent),
+            "zone_counts": zone_counts,
+            "zone_expected": total_balls / 3,
+            "zone_words": [heat_word(c, total_balls / 3) for c in zone_counts],
+            "route012": route012,
+            "route_expected": total_balls / 3,
+            "odd_even": (odd_c, even_c),
+            "odd_expected": total_balls * 17 / 33,
+            "big_small": (big_c, small_c),
+            "big_expected": total_balls * 17 / 33,
+            "prime_comp": (prime_c, comp_c),
+            "prime_expected": total_balls * 11 / 33,
+            "blue_odd_even": (blue_odd, blue_even),
+            "blue_prime_comp": (blue_prime, blue_comp, blue_neither),
+            "last_blue": int(last_row["blue"]),
+            "last_zone": last_zone,
+            "hot6": hot6,
+            "cold6": cold6,
+            "danma": danma,
+            "shahao": shahao,
+        }
+
+    @classmethod
+    def render_markdown(cls, a: Dict) -> List[str]:
+        """把分析结果渲染为专家口吻的中文解读行（看板展示用）。"""
+        if not a:
+            return ["> 暂无足够历史数据生成走势分析。", ""]
+        w = a["window"]
+        zc = a["zone_counts"]
+        r012 = a["route012"]
+        oe = a["odd_even"]
+        bs = a["big_small"]
+        pc = a["prime_comp"]
+        boe = a["blue_odd_even"]
+        bp, bc, bn = a["blue_prime_comp"]
+        lz = a["last_zone"]
+        lb = a["last_blue"]
+        if lb in cls.PRIME_SET:
+            lb_qh = "质数"
+        elif lb == 1:
+            lb_qh = "既非质数也非合数"
+        else:
+            lb_qh = "合数"
+
+        def fmt(nums):
+            return " ".join(f"`{x:02d}`" for x in nums)
+
+        lines = [
+            "> ⚠️ 以下为历史开奖数据的**描述性统计**（专家式走势分析口径）；"
+            "双色球每期独立随机，这些统计**不改变任何号码的中奖概率**，仅供走势查看。",
+            "",
+            f"**【三区走势】** 近{w}期红球三区分布为 `{zc[0]}:{zc[1]}:{zc[2]}`"
+            f"（均值约 `{a['zone_expected']:.0f}` 枚/区），"
+            f"一区{a['zone_words'][0]}、二区{a['zone_words'][1]}、三区{a['zone_words'][2]}；"
+            f"上期三区比 `{lz[0]}:{lz[1]}:{lz[2]}`。",
+            f"**【012路】** 近{w}期 0路`{r012[0]}`枚、1路`{r012[1]}`枚、2路`{r012[2]}`枚"
+            f"（均值约 `{a['route_expected']:.0f}` 枚/路）。",
+            f"**【奇偶比】** 近{w}期 `{oe[0]}:{oe[1]}`（奇数期望约 `{a['odd_expected']:.0f}` 枚）；"
+            f"**【大小比】** `{bs[0]}:{bs[1]}`（大数≥17，期望约 `{a['big_expected']:.0f}` 枚）；"
+            f"**【质合比】** `{pc[0]}:{pc[1]}`（质数期望约 `{a['prime_expected']:.0f}` 枚）。",
+            f"**【蓝球】** 近{w}期奇偶 `{boe[0]}:{boe[1]}`、质合 `{bp}:{bc}`"
+            f"{f'（另有{bn}期为01，既非质数也非合数）' if bn else ''}；"
+            f"上期蓝球 `{lb:02d}`"
+            f"（{'奇数' if lb % 2 else '偶数'}/{lb_qh}）。",
+            f"**【热号】** 近{30}期热号："
+            + "、".join(f"`{x:02d}`({c}次)" for x, c in a["hot6"])
+            + "。",
+            f"**【遗漏】** 当前遗漏最长："
+            + "、".join(f"`{x:02d}`({o}期未出)" for x, o in a["cold6"])
+            + "。",
+            f"**【胆码参考】** {fmt(a['danma'])}（近30期热号前三，专家口径）",
+            f"**【杀号参考】** {fmt(a['shahao'])}（遗漏最长，专家口径建议规避；"
+            "冷号回补无统计依据，杀号不提高中奖概率）",
+            "",
+        ]
+        return lines
+
+
+# ----------------------------------------------------------------------
 # 4. 基于 google-genai 的 Gemini AI 研判模块
 # ----------------------------------------------------------------------
 def generate_gemini_analysis(df: pd.DataFrame, candidates: List[Dict], anchor: int, actuarial: Dict) -> str:
@@ -594,6 +790,10 @@ def main():
     else:
         ai_commentary = generate_gemini_analysis(df, candidates, anchor_red, actuarial_info)
 
+    # 专家式走势分析（历史描述性统计；存档展示与新生成两种路径都计算）
+    expert_analysis = ExpertStyleAnalysis.analyze(df)
+    expert_lines = ExpertStyleAnalysis.render_markdown(expert_analysis)
+
     # 组装极简卡片式看板 (方案二：绝对不超宽，无横向滑动)
     current_time_str = datetime.now(BEIJING).strftime("%Y-%m-%d %H:%M")
     sync_mark = "官方接口同步成功" if sync_ok else "⚠️官方接口同步失败，数据可能滞后（已用本地库）"
@@ -624,6 +824,11 @@ def main():
         "---",
         "",
         *review_lines,
+        "### 📈 专家式走势分析",
+        "",
+        *expert_lines,
+        "---",
+        "",
         f"### 🎯 本期推荐组合（核心红胆：{anchor_txt} ｜ 蓝球 3+2 对冲{archive_mark}）",
         ""
     ]
